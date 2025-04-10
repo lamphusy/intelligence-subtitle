@@ -2,6 +2,30 @@ import sys
 import os
 import importlib.util
 import subprocess
+import argparse
+
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description="Intelligent Subtitle - Speech to Text with Whisper")
+    
+    # Add model size argument
+    parser.add_argument(
+        "--model-size", 
+        type=str, 
+        choices=["tiny", "base", "small", "medium", "large"],
+        default="small",
+        help="Whisper model size to use for transcription (default: small)"
+    )
+    
+    # Add language argument for future use
+    parser.add_argument(
+        "--language", 
+        type=str, 
+        default=None,
+        help="Language code for transcription (default: auto-detect)"
+    )
+    
+    return parser.parse_args()
 
 def check_dependencies():
     """Check if all required dependencies are installed"""
@@ -64,6 +88,18 @@ def check_ffmpeg():
         return False
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    args = parse_arguments()
+    
+    # Set environment variables based on arguments
+    if args.model_size:
+        os.environ["WHISPER_MODEL_SIZE"] = args.model_size
+        print(f"Using Whisper model: {args.model_size}")
+    
+    if args.language:
+        os.environ["WHISPER_LANGUAGE"] = args.language
+        print(f"Using language: {args.language}")
+    
     # Check dependencies first
     if not check_dependencies():
         sys.exit(1)
