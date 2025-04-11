@@ -1,13 +1,83 @@
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QApplication, QSlider, QStyle, QProgressBar
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFileDialog, QMessageBox, QApplication, QSlider, QStyle, QProgressBar, QStackedLayout, QFrame
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-from PyQt5.QtCore import QUrl, QTimer, Qt, QThread, pyqtSignal
+from PyQt5.QtCore import QUrl, QTimer, Qt, QThread, pyqtSignal, QRect
+from PyQt5.QtGui import QFont, QPalette, QColor
 import os
 import tempfile
 import ffmpeg
 import json
 from core.transcriber import transcribe
 from core.worker import TranscriptionWorker
+
+class VideoPlayerWithOverlay(QWidget):
+    """Custom video widget with subtitle overlay"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
+        # Use a layout for the base
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+        
+        # Create the video widget
+        self.video_widget = QVideoWidget(self)
+        self.video_widget.setMinimumSize(800, 450)
+        
+        # Add video widget to layout
+        self.layout.addWidget(self.video_widget)
+        
+        # Create subtitle label to be overlaid
+        self.subtitle_label = QLabel(self)
+        self.subtitle_label.setStyleSheet("""
+            background-color: rgba(0, 0, 0, 70);
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 18px;
+            font-weight: bold;
+        """)
+        self.subtitle_label.setWordWrap(True)
+        self.subtitle_label.setAlignment(Qt.AlignCenter)
+        self.subtitle_label.hide()  # Initially hidden
+        
+    def resizeEvent(self, event):
+        # Make sure the video widget fills the entire space
+        self.video_widget.setGeometry(0, 0, self.width(), self.height())
+        
+        # Position the subtitle at the bottom of the video with some margin
+        label_width = self.width() - 40  # 20px margin on each side
+        label_height = self.subtitle_label.heightForWidth(label_width)
+        
+        self.subtitle_label.setGeometry(
+            20,                              # Left margin
+            self.height() - label_height - 40,  # Bottom margin
+            label_width,                     # Width minus margins
+            label_height                     # Height based on content
+        )
+        
+        super().resizeEvent(event)
+    
+    def set_subtitle_text(self, text):
+        if not text:
+            self.subtitle_label.hide()
+            return
+            
+        self.subtitle_label.setText(text)
+        self.subtitle_label.adjustSize()
+        
+        # Update the position
+        label_width = self.width() - 40
+        label_height = self.subtitle_label.heightForWidth(label_width)
+        
+        self.subtitle_label.setGeometry(
+            20,
+            self.height() - label_height - 40,
+            label_width,
+            label_height
+        )
+        
+        self.subtitle_label.show()
 
 class VideoPlayer(QWidget):
     # Signal to start processing in the worker thread
@@ -16,14 +86,11 @@ class VideoPlayer(QWidget):
     def __init__(self):
         super().__init__()
         self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(10, 10, 10, 10)
+        self.layout.setSpacing(10)
 
-        # Create video widget
-        self.video_widget = QVideoWidget()
-        
-        # Create subtitle label
-        self.subtitle_label = QLabel("Subtitle will appear here...")
-        self.subtitle_label.setStyleSheet("background-color: rgba(0, 0, 0, 100); color: white; padding: 10px; font-size: 14px;")
-        self.subtitle_label.setAlignment(Qt.AlignCenter)
+        # Create custom video widget with overlay capability
+        self.video_container = VideoPlayerWithOverlay()
         
         # Create progress bar for transcription
         self.progress_bar = QProgressBar()
@@ -63,9 +130,8 @@ class VideoPlayer(QWidget):
         self.controls_layout.addWidget(self.duration_label)
         self.controls_layout.addWidget(self.save_subtitle_btn)
         
-        # Add widgets to main layout
-        self.layout.addWidget(self.video_widget)
-        self.layout.addWidget(self.subtitle_label)
+        # Add everything to main layout
+        self.layout.addWidget(self.video_container, 1)  # Give it a stretch factor of 1
         self.layout.addWidget(self.progress_bar)
         self.layout.addLayout(self.controls_layout)
 
@@ -73,7 +139,7 @@ class VideoPlayer(QWidget):
 
         # Set up media player
         self.media_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-        self.media_player.setVideoOutput(self.video_widget)
+        self.media_player.setVideoOutput(self.video_container.video_widget)
         
         # Connect signals
         self.media_player.error.connect(self.handle_error)
@@ -83,9 +149,15 @@ class VideoPlayer(QWidget):
         
         # For handling subtitles
         self.segments = []
-        self.current_segment_index = 0
+        self.current_segment_index = -1
+        self.next_segment_index = 0
         self.temp_dir = tempfile.mkdtemp()
         self.video_path = ""
+        
+        # Subtitle timer for more accurate synchronization
+        self.subtitle_timer = QTimer(self)
+        self.subtitle_timer.setInterval(16)  # ~60fps check for smooth updates
+        self.subtitle_timer.timeout.connect(self.update_subtitle_display)
         
         # Set up worker thread for transcription
         self.setup_worker_thread()
@@ -135,39 +207,74 @@ class VideoPlayer(QWidget):
         
         # Show progress bar and start transcription in background
         self.progress_bar.setVisible(True)
-        self.subtitle_label.setText("Starting transcription...")
+        self.video_container.set_subtitle_text("Starting transcription...")
         
         # Start transcription in background thread
         QApplication.processEvents()  # Force UI update
         self.process_video_signal.emit(video_path)
     
     def on_transcription_progress(self, message):
-        self.subtitle_label.setText(message)
+        self.video_container.set_subtitle_text(message)
         QApplication.processEvents()  # Force UI update
     
     def on_transcription_complete(self, segments):
         self.segments = segments
-        self.current_segment_index = 0
+        self.current_segment_index = -1
+        self.next_segment_index = 0
         self.save_subtitle_btn.setEnabled(True)
         self.progress_bar.setVisible(False)
-        self.subtitle_label.setText("Transcription complete! Subtitles will appear as the video plays.")
+        self.video_container.set_subtitle_text("Transcription complete! Subtitles will appear as the video plays.")
+        
+        # Start the subtitle timer for precise synchronization
+        self.subtitle_timer.start()
+        
+        # Hide message after 3 seconds
+        QTimer.singleShot(3000, lambda: self.video_container.set_subtitle_text(""))
     
     def on_transcription_error(self, error_message):
         self.progress_bar.setVisible(False)
         QMessageBox.critical(self, "Transcription Error", f"Failed to transcribe audio: {error_message}")
-        self.subtitle_label.setText("Error in transcription. No subtitles available.")
+        self.video_container.set_subtitle_text("Error in transcription. No subtitles available.")
     
     def toggle_play_pause(self):
         if self.media_player.state() == QMediaPlayer.PlayingState:
             self.media_player.pause()
+            self.subtitle_timer.stop()
         else:
             self.media_player.play()
+            if self.segments:
+                self.subtitle_timer.start()
     
     def state_changed(self, state):
         if state == QMediaPlayer.PlayingState:
             self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            if self.segments:
+                self.subtitle_timer.start()
         else:
             self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.subtitle_timer.stop()
+    
+    def update_subtitle_display(self):
+        """Updates the subtitle display based on current playback time"""
+        if not self.segments:
+            return
+            
+        # Get current position in seconds
+        current_time = self.media_player.position() / 1000.0
+        
+        # Check if we need to update to the next segment
+        if self.next_segment_index < len(self.segments):
+            next_segment = self.segments[self.next_segment_index]
+            if current_time >= next_segment['start']:
+                self.current_segment_index = self.next_segment_index
+                self.next_segment_index += 1
+                self.video_container.set_subtitle_text(next_segment['text'])
+        
+        # Check if current segment has ended
+        if self.current_segment_index >= 0 and self.current_segment_index < len(self.segments):
+            current_segment = self.segments[self.current_segment_index]
+            if current_time > current_segment['end']:
+                self.video_container.set_subtitle_text("")
     
     def position_changed(self, position):
         # Update the slider position
@@ -176,20 +283,35 @@ class VideoPlayer(QWidget):
         # Update the duration label
         self.update_duration_label(position, self.media_player.duration())
         
-        # Convert position from milliseconds to seconds
-        current_time = position / 1000.0
-        
-        # Find the current segment that matches the playback position
+        # Handle seeking - reset segment indices when user seeks
+        if self.segments and abs(position / 1000.0 - self.get_current_segment_time()) > 1.0:
+            self.update_segment_indices(position / 1000.0)
+    
+    def get_current_segment_time(self):
+        """Get the time of the current segment or 0 if none"""
+        if self.current_segment_index >= 0 and self.current_segment_index < len(self.segments):
+            return self.segments[self.current_segment_index]['start']
+        return 0
+    
+    def update_segment_indices(self, current_time):
+        """Update segment indices after seeking"""
+        # Find the next segment that should be displayed
         for i, segment in enumerate(self.segments):
             if segment['start'] <= current_time and segment['end'] >= current_time:
-                if i != self.current_segment_index:  # Only update if segment changed
-                    self.current_segment_index = i
-                    self.subtitle_label.setText(segment['text'])
+                self.current_segment_index = i
+                self.next_segment_index = i + 1
+                self.video_container.set_subtitle_text(segment['text'])
                 return
-        
-        # If no matching segment, clear the subtitle label
-        if self.segments and current_time > 0:
-            self.subtitle_label.setText("")
+            elif segment['start'] > current_time:
+                self.current_segment_index = i - 1
+                self.next_segment_index = i
+                self.video_container.set_subtitle_text("")
+                return
+                
+        # If we've reached the end, reset indices
+        self.current_segment_index = len(self.segments) - 1
+        self.next_segment_index = len(self.segments)
+        self.video_container.set_subtitle_text("")
     
     def duration_changed(self, duration):
         self.position_slider.setRange(0, duration)
@@ -302,8 +424,31 @@ class VideoPlayer(QWidget):
         return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{milliseconds:03d}"
         
     def closeEvent(self, event):
+        # Stop the subtitle timer
+        self.subtitle_timer.stop()
+        
         # Properly clean up to avoid thread issues
         if hasattr(self, 'worker_thread') and self.worker_thread.isRunning():
+            # Signal the worker to stop
+            if hasattr(self.transcription_worker, 'stop'):
+                self.transcription_worker.stop()
+            
+            # Quit the thread and wait for it to finish
             self.worker_thread.quit()
-            self.worker_thread.wait(1000)  # Wait up to 1 second
+            if not self.worker_thread.wait(2000):  # Wait up to 2 seconds
+                print("Warning: Worker thread did not terminate properly")
+                self.worker_thread.terminate()  # Force termination if needed
+            
+            # Make sure we clean up worker resources
+            self.transcription_worker.deleteLater()
+            self.worker_thread.deleteLater()
+        
+        # For multiprocessing cleanup
+        import multiprocessing.resource_tracker as resource_tracker
+        try:
+            resource_tracker._resource_tracker._stop = True  # Signal the resource tracker to stop
+            resource_tracker._resource_tracker.join(1)       # Wait for it to stop
+        except (AttributeError, AssertionError):
+            pass  # In case the resource tracker is not running
+            
         event.accept()

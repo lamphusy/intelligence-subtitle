@@ -3,6 +3,17 @@ import os
 import importlib.util
 import subprocess
 import argparse
+import atexit
+
+# Import our custom cleanup module
+try:
+    from cleanup_resources import cleanup
+except ImportError:
+    def cleanup():
+        pass  # Fallback if module not found
+
+# Register cleanup function to run before application exit
+atexit.register(cleanup)
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -23,6 +34,13 @@ def parse_arguments():
         type=str, 
         default=None,
         help="Language code for transcription (default: auto-detect)"
+    )
+    
+    # Add a new option to forcibly suppress resource warnings
+    parser.add_argument(
+        "--no-warnings",
+        action="store_true",
+        help="Suppress resource warning messages"
     )
     
     return parser.parse_args()
@@ -100,6 +118,13 @@ if __name__ == "__main__":
         os.environ["WHISPER_LANGUAGE"] = args.language
         print(f"Using language: {args.language}")
     
+    # Optionally suppress resource warnings
+    if args.no_warnings:
+        import warnings
+        warnings.filterwarnings("ignore", category=ResourceWarning)
+        warnings.filterwarnings("ignore", category=UserWarning, module="multiprocessing.resource_tracker")
+        print("Resource warnings suppressed")
+    
     # Check dependencies first
     if not check_dependencies():
         sys.exit(1)
@@ -109,6 +134,10 @@ if __name__ == "__main__":
         print("Warning: FFmpeg may not be correctly installed.")
         print("Video transcription might not work properly.")
         
-    # Now import and launch the app
-    from gui.main_window import launch_app
-    launch_app()
+    try:
+        # Now import and launch the app
+        from gui.main_window import launch_app
+        launch_app()
+    finally:
+        # Call cleanup even if app crashes
+        cleanup()
