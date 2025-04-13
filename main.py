@@ -49,7 +49,7 @@ def check_dependencies():
     """Check if all required dependencies are installed"""
     
     required_packages = {
-        'PyQt5': 'pip install PyQt5',
+        'PySide6': 'pip install PySide6',
         'ffmpeg': 'pip install ffmpeg-python',  # The module name is actually 'ffmpeg'
         'whisper': 'pip install git+https://github.com/openai/whisper.git',
         'torch': 'pip install torch'

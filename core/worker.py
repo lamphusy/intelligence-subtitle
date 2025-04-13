@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
+from PySide6.QtCore import QObject, Signal, Slot
 import os
 import tempfile
 import traceback
@@ -10,9 +10,9 @@ class TranscriptionWorker(QObject):
     Worker class that handles the transcription process in a separate thread.
     """
     # Signals
-    transcription_progress = pyqtSignal(str)  # To report progress
-    transcription_complete = pyqtSignal(list)  # To return the transcribed segments
-    transcription_error = pyqtSignal(str)      # To report errors
+    transcription_progress = Signal(str)  # To report progress
+    transcription_complete = Signal(list)  # To return the transcribed segments
+    transcription_error = Signal(str)      # To report errors
     
     def __init__(self):
         super().__init__()
@@ -32,7 +32,7 @@ class TranscriptionWorker(QObject):
         except Exception as e:
             print(f"Error cleaning up temp directory: {str(e)}")
         
-    @pyqtSlot(str)
+    @Slot(str)
     def process_video(self, video_path):
         """Process the video and emit results"""
         self.video_path = video_path
@@ -97,6 +97,7 @@ class TranscriptionWorker(QObject):
                 ffmpeg
                 .input(video_path)
                 .output(audio_path, acodec='pcm_s16le', ac=1, ar='16k')
+                .global_args('-hide_banner', '-loglevel', 'error')
                 .run(quiet=True, overwrite_output=True)
             )
             

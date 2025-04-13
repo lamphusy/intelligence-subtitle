@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QApplication, QMainWindow
+from PySide6.QtWidgets import QApplication, QMainWindow
 from gui.video_player import VideoPlayer
 import sys
 
@@ -41,4 +41,4 @@ def launch_app():
     # Make sure cleanup is called when the application exits
     app.aboutToQuit.connect(cleanup)
     
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

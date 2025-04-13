@@ -1,4 +1,4 @@
-pyqt5
+pyside6
 whisper
 torch
 ffmpeg-python
