@@ -49,7 +49,7 @@ def check_dependencies():
     """Check if all required dependencies are installed"""
     
     required_packages = {
-        'PyQt5': 'pip install PyQt5',
+        'flet': 'pip install flet',
         'ffmpeg': 'pip install ffmpeg-python',  # The module name is actually 'ffmpeg'
         'whisper': 'pip install git+https://github.com/openai/whisper.git',
         'torch': 'pip install torch'
@@ -94,7 +94,22 @@ def check_ffmpeg():
         # If the command was successful
         if result.returncode == 0:
             print("FFmpeg is correctly installed.")
-            return True
+            
+            # Also check for ffplay
+            ffplay_result = subprocess.run(['ffplay', '-version'], 
+                               stdout=subprocess.PIPE, 
+                               stderr=subprocess.PIPE,
+                               text=True)
+            
+            if ffplay_result.returncode == 0:
+                print("FFplay is correctly installed.")
+                return True
+            else:
+                print("FFplay is not installed. Please install FFplay for video playback.")
+                print("On macOS: brew install ffmpeg --with-ffplay")
+                print("On Linux: apt-get install ffmpeg")
+                print("On Windows: Download from https://ffmpeg.org/download.html")
+                return False
         else:
             print("FFmpeg may not be correctly installed.")
             print(result.stderr)
