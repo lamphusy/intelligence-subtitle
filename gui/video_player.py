@@ -3,21 +3,18 @@ import os
 import tempfile
 import json
 import shutil
-import time # Import time cho dummy worker
+import time
+import vlc
 
 # --- PyQt5 Imports ---
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                              QFileDialog, QMessageBox, QApplication, QSlider, QStyle,
-                             QProgressBar, QGraphicsDropShadowEffect) # Thêm QGraphicsDropShadowEffect nếu muốn thử
-from PyQt5.QtMultimediaWidgets import QVideoWidget
-from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-from PyQt5.QtCore import QUrl, QTimer, Qt, QThread, pyqtSignal, QRect
-from PyQt5.QtGui import QFont, QPalette, QColor, QFontMetrics, QPainter
+                             QProgressBar)
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QRect, QUrl
+from PyQt5.QtGui import QFont, QFontMetrics
 
 # --- Giả lập core nếu không tìm thấy ---
 try:
-    # Điều chỉnh đường dẫn nếu thư mục 'core' không nằm cùng cấp
-    # Ví dụ: sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
     from core.transcriber import transcribe
     from core.worker import TranscriptionWorker
     print("INFO: Using actual 'core' module.")
@@ -61,7 +58,6 @@ except ImportError as e:
     def transcribe(audio_path, temp_dir):
         print(f"Dummy transcribe called: Path={audio_path}, Temp={temp_dir}")
         return []
-# --- Kết thúc phần giả lập ---
 
 class VideoPlayer(QWidget):
     process_video_signal = pyqtSignal(str)
@@ -77,47 +73,31 @@ class VideoPlayer(QWidget):
         self.layout.setContentsMargins(10, 10, 10, 10)
         self.layout.setSpacing(10)
 
-        self.video_widget = QVideoWidget()
+        # Create VLC instance with macOS specific options if needed
+        vlc_options = []
+        if sys.platform == "darwin":
+            # Explicitly set the video output module for macOS
+            # This can help resolve rendering issues like "Failed to create video converter"
+            vlc_options.append("--vout=macosx") 
+            
+        self.instance = vlc.Instance(vlc_options)
+        self.mediaplayer = self.instance.media_player_new()
+        
+        # Create video widget
+        self.video_widget = QWidget(self)
         self.video_widget.setMinimumSize(640, 360)
-        self.video_widget.setAutoFillBackground(True)
-
-        self.subtitle_label = QLabel(self)
-        self.subtitle_label.setAttribute(Qt.WA_TranslucentBackground)
-        self.subtitle_label.setAutoFillBackground(False)
-
-        # --- Tắt Debug Visuals mặc định ---
-        debug_style = False # Đặt thành True để bật nền đỏ/viền vàng
-        # ----------------------------------
-        temp_bg = "background-color: rgba(255, 0, 0, 0.4);" if debug_style else "background-color: transparent;"
-        temp_border = "border: 1px solid yellow;" if debug_style else "border: none;"
-
-        # --- Stylesheet KHÔNG CÓ text-shadow ---
-        self.subtitle_label.setStyleSheet(f"""
-            QLabel {{
-                color: white;
-                font-size: {self.SUBTITLE_FONT_SIZE}px;
-                font-weight: bold;
-                padding: 5px;
-                margin: 0px;
-                {temp_border}  /* DEBUG BORDER */
-                {temp_bg}      /* DEBUG BACKGROUND */
-                background: none; /* Đảm bảo nền trong suốt */
-                /* text-shadow: ... ; ĐÃ BỊ XÓA */
-            }}
-        """)
-        # --- Tùy chọn: Thêm hiệu ứng đổ bóng bằng QGraphicsDropShadowEffect ---
-        # shadow = QGraphicsDropShadowEffect(self)
-        # shadow.setBlurRadius(5)
-        # shadow.setColor(QColor(0, 0, 0, 190))
-        # shadow.setOffset(1.5, 1.5)
-        # self.subtitle_label.setGraphicsEffect(shadow)
-        # -------------------------------------------------------------------
-
-        self.subtitle_label.setWordWrap(True)
-        self.subtitle_label.setAlignment(Qt.AlignCenter)
-        self.subtitle_label.hide()
-        self.subtitle_label.raise_()
-
+        self.video_widget.setStyleSheet("background-color: black;")
+        
+        # IMPORTANT: Don't set the video output here for macOS yet
+        # We'll do it in showEvent after the widget is visible
+        if sys.platform.startswith('linux'): 
+            self.mediaplayer.set_xwindow(self.video_widget.winId())
+        elif sys.platform == "win32": 
+            self.mediaplayer.set_hwnd(self.video_widget.winId())
+        # elif sys.platform == "darwin": 
+        #     # We will set nsobject in showEvent for macOS
+        #     pass 
+        
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(False)
@@ -151,23 +131,18 @@ class VideoPlayer(QWidget):
         self.layout.addLayout(self.controls_layout)
         self.setLayout(self.layout)
 
-        self.media_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-        self.media_player.setVideoOutput(self.video_widget)
-        self.media_player.error.connect(self.handle_error)
-        self.media_player.positionChanged.connect(self.position_changed)
-        self.media_player.durationChanged.connect(self.duration_changed)
-        self.media_player.stateChanged.connect(self.state_changed)
-        self.media_player.mediaStatusChanged.connect(self.media_status_changed)
-
         self.segments = []
         self.current_segment_index = -1
         self.next_segment_index = 0
         self.temp_dir = tempfile.mkdtemp(prefix="subtitle_app_")
         print(f"INFO: Temp directory created: {self.temp_dir}")
         self.video_path = ""
-        self.subtitle_timer = QTimer(self)
-        self.subtitle_timer.setInterval(self.SUBTITLE_TIMER_INTERVAL)
-        self.subtitle_timer.timeout.connect(self.update_subtitle_display)
+        self.subtitle_path = ""
+        
+        # Timer for updating the UI
+        self.timer = QTimer(self)
+        self.timer.setInterval(200)
+        self.timer.timeout.connect(self.update_ui)
 
         self.setup_worker_thread()
         self.open_btn.clicked.connect(self.open_video_dialog)
@@ -182,75 +157,8 @@ class VideoPlayer(QWidget):
         self.transcription_worker.transcription_error.connect(self.on_transcription_error)
         self.process_video_signal.connect(self.transcription_worker.process_video)
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
-        # self.transcription_worker.finished.connect(self.transcription_worker.deleteLater) # Chỉ khi worker là QObject
         self.worker_thread.start()
         print("INFO: Worker thread started.")
-
-    def resizeEvent(self, event):
-        """Xử lý thay đổi kích thước cửa sổ."""
-        super().resizeEvent(event)
-        QTimer.singleShot(0, self.position_subtitle_label)
-
-    def showEvent(self, event):
-        """Gọi khi widget được hiển thị."""
-        super().showEvent(event)
-        # print("DEBUG: showEvent called")
-        QTimer.singleShot(50, self.position_subtitle_label)
-
-    def position_subtitle_label(self):
-        """Tính toán và đặt vị trí, kích thước cho label phụ đề."""
-        if not self.video_widget.isVisible():
-            return
-
-        video_rect = self.video_widget.geometry()
-        if not video_rect.isValid() or video_rect.width() <= 0 or video_rect.height() <= 0:
-            # print("DEBUG: position_subtitle_label - Invalid video_rect, trying parent rect")
-            video_rect = self.rect()
-            if not video_rect.isValid() or video_rect.width() <= 0 or video_rect.height() <= 0:
-                # print("DEBUG: position_subtitle_label - Parent rect also invalid, cannot position")
-                return
-
-        label_width = video_rect.width() - (2 * self.SUBTITLE_LR_MARGIN)
-        if label_width < 50: label_width = 50
-
-        current_text = self.subtitle_label.text()
-        fm = QFontMetrics(self.subtitle_label.font())
-        min_label_height = fm.height() + 10
-
-        if not current_text:
-             label_height = min_label_height
-        else:
-             bounding_rect = fm.boundingRect(QRect(0, 0, label_width, 1000),
-                                               Qt.AlignCenter | Qt.TextWordWrap,
-                                               current_text)
-             label_height = bounding_rect.height() + 10
-
-        if label_height < min_label_height: label_height = min_label_height
-        if label_height <= 0: label_height = min_label_height
-
-        label_x = video_rect.x() + self.SUBTITLE_LR_MARGIN
-        label_y = video_rect.y() + video_rect.height() - label_height - self.SUBTITLE_BOTTOM_MARGIN
-
-        self.subtitle_label.setGeometry(label_x, label_y, label_width, label_height)
-        self.subtitle_label.raise_()
-
-    def set_subtitle_text(self, text):
-        """Đặt nội dung cho label phụ đề và cập nhật hiển thị."""
-        current_text_on_label = self.subtitle_label.text()
-        is_currently_visible = self.subtitle_label.isVisible()
-        new_text_trimmed = text.strip() if text else "" # Xử lý None và strip
-
-        if not new_text_trimmed:
-            if is_currently_visible:
-                self.subtitle_label.hide()
-                self.subtitle_label.clear()
-            return
-
-        if new_text_trimmed != current_text_on_label or not is_currently_visible:
-            self.subtitle_label.setText(new_text_trimmed)
-            self.position_subtitle_label() # Định vị lại TRƯỚC khi show
-            if not is_currently_visible:
-                self.subtitle_label.show()
 
     def open_video_dialog(self):
         """Mở hộp thoại chọn tệp video."""
@@ -260,6 +168,20 @@ class VideoPlayer(QWidget):
         if video_path:
             self.load_video(video_path)
 
+    def showEvent(self, event):
+        """Called when the widget is shown. Set VLC output for macOS here."""
+        super().showEvent(event)
+        if sys.platform == "darwin" and self.video_widget.winId() != 0:
+            try:
+                print(f"INFO: Setting nsobject for VLC: {self.video_widget.winId()}")
+                self.mediaplayer.set_nsobject(int(self.video_widget.winId()))
+                print("INFO: nsobject set successfully.")
+            except Exception as e:
+                print(f"ERROR: Failed to set nsobject for VLC: {e}")
+                QMessageBox.critical(self, "VLC Error", f"Failed to initialize VLC video output:\n{str(e)}")
+        # Also trigger UI update when shown
+        QTimer.singleShot(100, self.update_ui) 
+
     def load_video(self, video_path):
         """Tải video mới, đặt lại trạng thái và bắt đầu gỡ băng."""
         self.video_path = video_path
@@ -268,60 +190,59 @@ class VideoPlayer(QWidget):
             QMessageBox.critical(self, "Error", f"Video file not found:\n{video_path}")
             return
 
-        self.media_player.stop()
-        self.segments = []
-        self.current_segment_index = -1
-        self.next_segment_index = 0
-        self.save_subtitle_btn.setEnabled(False)
-        self.set_subtitle_text("")
-        if self.subtitle_timer.isActive(): self.subtitle_timer.stop()
-        self.play_pause_btn.setEnabled(False)
-        self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        self.position_slider.setValue(0)
-        self.position_slider.setEnabled(False)
-        self.duration_label.setText("00:00 / 00:00")
-
-        url = QUrl.fromLocalFile(video_path)
-        self.media_player.setMedia(QMediaContent(url))
-
-        self.progress_bar.setVisible(True)
-        self.set_subtitle_text("Loading video & starting transcription...")
-        print("INFO: Emitting process_video_signal")
-        self.process_video_signal.emit(video_path)
-
-    def media_status_changed(self, status):
-        """Xử lý thay đổi trạng thái của media."""
-        # print(f"DEBUG: media_status_changed - Status: {status}")
-        if status == QMediaPlayer.LoadedMedia:
-            print("INFO: Media Loaded.")
+        # Stop any playing media
+        self.mediaplayer.stop()
+        
+        # Create new media with proper path handling
+        try:
+            abs_path = os.path.abspath(video_path)
+            if sys.platform == "win32":
+                abs_path = abs_path.replace('\\', '/')
+            
+            # Use file URI scheme
+            file_uri = QUrl.fromLocalFile(abs_path).toString()
+            print(f"INFO: Attempting to load media URI: {file_uri}")
+            media = self.instance.media_new(file_uri)
+            if not media:
+                raise Exception("Failed to create media object from URI")
+            
+            # Parse media to get duration information sooner
+            media.parse()
+            
+            # Set media to player
+            self.mediaplayer.set_media(media)
+            
+            # Reset state
+            self.segments = []
+            self.current_segment_index = -1
+            self.next_segment_index = 0
+            self.save_subtitle_btn.setEnabled(False)
             self.play_pause_btn.setEnabled(True)
+            self.position_slider.setValue(0)
             self.position_slider.setEnabled(True)
-            QTimer.singleShot(0, self.position_subtitle_label)
-        elif status == QMediaPlayer.EndOfMedia:
-             print("INFO: End Of Media.")
-             self.media_player.setPosition(0)
-             self.media_player.pause()
-             self.set_subtitle_text("")
-             self.current_segment_index = -1
-             self.next_segment_index = 0
-        elif status == QMediaPlayer.InvalidMedia:
-            print("ERROR: Invalid Media.")
-            self.handle_error(QMediaPlayer.FormatError)
-        elif status == QMediaPlayer.LoadingMedia:
-            print("INFO: Media Loading...")
-            self.position_slider.setEnabled(False)
-        elif status == QMediaPlayer.NoMedia:
-            print("INFO: No Media.")
+            self.duration_label.setText("00:00 / 00:00")
+
+            # Set window title to include video name
+            self.setWindowTitle(f"Intelligent Subtitle - {os.path.basename(video_path)}")
+
+            # Start transcription
+            self.progress_bar.setVisible(True)
+            print("INFO: Emitting process_video_signal")
+            self.process_video_signal.emit(video_path)
+            
+            # Trigger UI update after a short delay to allow media parsing
+            QTimer.singleShot(500, self.update_ui)
+            
+        except Exception as e:
+            print(f"ERROR: Failed to load video: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to load video:\n{str(e)}")
             self.play_pause_btn.setEnabled(False)
             self.position_slider.setEnabled(False)
-            self.duration_label.setText("00:00 / 00:00")
-            self.set_subtitle_text("")
+            self.progress_bar.setVisible(False)
 
     def on_transcription_progress(self, message):
         """Cập nhật thông báo tiến trình gỡ băng."""
-        if self.media_player.state() != QMediaPlayer.PlayingState or not self.subtitle_label.isVisible():
-             print(f"INFO: Transcription Progress: {message}")
-             self.set_subtitle_text(message)
+        print(f"INFO: Transcription Progress: {message}")
 
     def on_transcription_complete(self, segments):
         """Xử lý khi gỡ băng hoàn tất."""
@@ -332,169 +253,122 @@ class VideoPlayer(QWidget):
         self.save_subtitle_btn.setEnabled(bool(self.segments))
         self.progress_bar.setVisible(False)
 
-        if self.media_player.state() != QMediaPlayer.PlayingState:
-             completion_msg = "Transcription complete!" if self.segments else "Transcription complete (no subtitles found)."
-             self.set_subtitle_text(completion_msg + " Press play.")
-             QTimer.singleShot(4000, self.clear_info_message_if_not_playing)
-        else:
-             if self.segments:
-                 print("INFO: Transcription complete while playing, starting subtitle timer.")
-                 self.update_subtitle_display()
-                 if not self.subtitle_timer.isActive(): self.subtitle_timer.start()
+        if self.segments:
+            try:
+                self.subtitle_path = os.path.join(self.temp_dir, "subtitles.srt")
+                self.save_as_srt(self.subtitle_path)
+                
+                # Load subtitles into VLC using file URI
+                abs_subtitle_path = os.path.abspath(self.subtitle_path)
+                subtitle_uri = QUrl.fromLocalFile(abs_subtitle_path).toString()
+                print(f"INFO: Setting subtitle file URI: {subtitle_uri}")
+                
+                # Add subtitle track
+                result = self.mediaplayer.add_slave(vlc.MediaSlaveType.subtitle, subtitle_uri, True)
+                if not result:
+                     print("WARNING: add_slave returned False, subtitles might not load.")
+                
+                # Give VLC a moment to process the subtitle file
+                QTimer.singleShot(200, self.check_and_enable_subtitles)
 
-    def clear_info_message_if_not_playing(self):
-        """Xóa các thông báo trạng thái nếu video không đang phát."""
-        if self.media_player.state() != QMediaPlayer.PlayingState:
-            current_msg = self.subtitle_label.text()
-            info_msgs = ["Transcription complete", "Loading video", "Error in transcription"]
-            if any(msg in current_msg for msg in info_msgs):
-                 print("INFO: Clearing info message.")
-                 self.set_subtitle_text("")
+            except Exception as e:
+                print(f"ERROR: Failed to load subtitles: {e}")
+                QMessageBox.warning(self, "Warning", f"Subtitles were generated but could not be loaded:\n{str(e)}")
 
     def on_transcription_error(self, error_message):
         """Xử lý khi có lỗi trong quá trình gỡ băng."""
         print(f"ERROR: Transcription Error: {error_message}")
         self.progress_bar.setVisible(False)
         QMessageBox.critical(self, "Transcription Error", f"Failed to transcribe audio:\n{error_message}")
-        self.set_subtitle_text("Error in transcription.")
-        QTimer.singleShot(5000, self.clear_info_message_if_not_playing)
+
+    def check_and_enable_subtitles(self):
+        """Check available subtitle tracks and enable the first one."""
+        try:
+            spu_count = self.mediaplayer.video_get_spu_count()
+            print(f"INFO: Found {spu_count} subtitle tracks.")
+            
+            if spu_count > 0:
+                # Get description of tracks (index 0 is disable)
+                spu_desc = self.mediaplayer.video_get_spu_description()
+                print(f"INFO: Subtitle descriptions: {spu_desc}")
+                
+                # Find the index of our added subtitle (often index 1)
+                # The description tuple might look like: [(0, b'Disable'), (1, b'Track 1 - [SubRip]')] 
+                # or similar, depending on VLC version and OS.
+                # We want the first non-disable track.
+                track_id_to_enable = -1
+                for track_id, track_name_bytes in spu_desc:
+                    if track_id != 0: # Skip the 'Disable' track
+                        track_id_to_enable = track_id
+                        print(f"INFO: Found subtitle track ID {track_id} to enable.")
+                        break
+                
+                if track_id_to_enable != -1:
+                    result = self.mediaplayer.video_set_spu(track_id_to_enable)
+                    if result == 0:
+                        print(f"INFO: Successfully enabled subtitle track ID {track_id_to_enable}.")
+                    else:
+                        print(f"WARNING: Failed to enable subtitle track ID {track_id_to_enable} (Error code: {result})")
+                else:
+                     print("WARNING: No suitable subtitle track ID found to enable.")
+            else:
+                print("WARNING: No subtitle tracks available to enable.")
+        except Exception as e:
+            print(f"ERROR: Exception while checking/enabling subtitles: {e}")
 
     def toggle_play_pause(self):
         """Chuyển đổi giữa trạng thái phát và tạm dừng."""
-        if not self.play_pause_btn.isEnabled(): return
-        if self.media_player.state() == QMediaPlayer.PlayingState:
-            print("INFO: Pausing media.")
-            self.media_player.pause()
-        else:
-            print("INFO: Playing media.")
-            self.media_player.play()
-
-    def state_changed(self, state):
-        """Xử lý thay đổi trạng thái của media player."""
-        # print(f"DEBUG: state_changed - State: {state}")
-        if state == QMediaPlayer.PlayingState:
-            self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
-            if self.segments and not self.subtitle_timer.isActive():
-                print("INFO: Player playing, starting subtitle timer.")
-                current_time_sec = self.media_player.position() / 1000.0
-                self.update_segment_indices(current_time_sec)
-                current_text = self.get_current_subtitle_text(current_time_sec)
-                self.set_subtitle_text(current_text)
-                self.subtitle_timer.start()
-            self.clear_info_message_if_not_playing()
-        else: # Paused, Stopped
-            self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-            if self.subtitle_timer.isActive():
-                print("INFO: Player not playing, stopping subtitle timer.")
-                self.subtitle_timer.stop()
-
-    def update_subtitle_display(self):
-        """Cập nhật hiển thị phụ đề dựa trên thời gian hiện tại."""
-        if not self.segments or self.media_player.state() != QMediaPlayer.PlayingState:
-            if self.subtitle_timer.isActive(): self.subtitle_timer.stop()
+        if not self.play_pause_btn.isEnabled():
             return
-
-        current_time = self.media_player.position() / 1000.0
-        text_to_display = "" # Mặc định là không hiển thị gì
-
-        # Tìm segment phù hợp
-        target_segment = None
-        # Tối ưu: kiểm tra segment tiếp theo trước nếu hợp lệ
-        if self.next_segment_index < len(self.segments):
-            next_seg = self.segments[self.next_segment_index]
-            if current_time >= next_seg['start']:
-                 target_segment = next_seg
-                 self.current_segment_index = self.next_segment_index
-                 self.next_segment_index += 1 # Chuẩn bị cho lần sau
-
-        # Nếu không phải next_segment, kiểm tra current_segment
-        if target_segment is None and self.current_segment_index >= 0 and self.current_segment_index < len(self.segments):
-             current_seg = self.segments[self.current_segment_index]
-             if current_time >= current_seg['start'] and current_time < current_seg['end']:
-                 target_segment = current_seg
-
-        # Lấy text từ segment tìm được (hoặc để trống nếu không tìm thấy hoặc đã qua thời gian kết thúc)
-        if target_segment and current_time < target_segment['end']:
-            text_to_display = target_segment.get('text', '')
-
-        # Chỉ cập nhật QLabel nếu text thực sự thay đổi
-        if self.subtitle_label.text() != text_to_display:
-            self.set_subtitle_text(text_to_display)
-
-    def position_changed(self, position):
-        """Cập nhật vị trí slider."""
-        if not self.position_slider.isSliderDown():
-            self.position_slider.setValue(position)
-        self.update_duration_label(position, self.media_player.duration())
-
-    def duration_changed(self, duration):
-        """Cập nhật khoảng giá trị của slider."""
-        print(f"INFO: Duration changed: {duration} ms")
-        self.position_slider.setRange(0, duration)
-        self.position_slider.setEnabled(duration > 0)
-        self.update_duration_label(self.media_player.position(), duration)
+            
+        if self.mediaplayer.is_playing():
+            self.mediaplayer.pause()
+            self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        else:
+            # Ensure media is loaded before playing
+            if self.mediaplayer.get_media() is None:
+                 QMessageBox.warning(self, "Warning", "No video loaded.")
+                 return
+                 
+            if self.mediaplayer.play() == -1:
+                QMessageBox.critical(self, "Error", "Unable to play video")
+                return
+            self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            self.timer.start()
+            # Explicitly call update_ui after starting play
+            QTimer.singleShot(50, self.update_ui) 
 
     def set_position(self, position):
         """Di chuyển vị trí phát media player."""
-        self.media_player.setPosition(position)
-        if self.segments:
-            current_time_sec = position / 1000.0
-            self.update_segment_indices(current_time_sec)
-            current_text = self.get_current_subtitle_text(current_time_sec)
-            self.set_subtitle_text(current_text)
+        self.mediaplayer.set_position(position / 1000.0)
 
-    def update_segment_indices(self, current_time):
-        """Cập nhật index phụ đề (current và next) sau khi seek."""
-        self.current_segment_index = -1
-        self.next_segment_index = 0
-        found_current = False
-        for i, segment in enumerate(self.segments):
-            if not found_current and current_time < segment['start']:
-                self.next_segment_index = i
-                break
-            elif current_time < segment['end']:
-                self.current_segment_index = i
-                self.next_segment_index = i + 1
-                found_current = True
-                break
-        if not found_current and self.segments:
-            self.current_segment_index = len(self.segments) - 1
-            self.next_segment_index = len(self.segments)
+    def update_ui(self):
+        """Cập nhật giao diện người dùng."""
+        # Update position slider
+        position = self.mediaplayer.get_position() * 1000
+        self.position_slider.setValue(int(position))
 
-    def get_current_subtitle_text(self, current_time):
-        """Lấy text phụ đề chính xác cho thời điểm cụ thể."""
-        for segment in self.segments:
-             if segment['start'] <= current_time < segment['end']:
-                 return segment.get('text', '')
-        return ""
+        # Update duration label
+        duration = self.mediaplayer.get_length()
+        if duration > 0:
+            self.update_duration_label(position, duration)
+
+        # Update play/pause button
+        if not self.mediaplayer.is_playing():
+            self.timer.stop()
+            self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
 
     def update_duration_label(self, position, duration):
         """Cập nhật label hiển thị thời gian."""
         if duration <= 0:
             self.duration_label.setText("--:-- / --:--")
             return
-        pos_sec_total = position // 1000
-        dur_sec_total = duration // 1000
+        # Ensure calculations result in integers for formatting
+        pos_sec_total = int(position // 1000)
+        dur_sec_total = int(duration // 1000)
         pos_min, pos_sec = divmod(pos_sec_total, 60)
         dur_min, dur_sec = divmod(dur_sec_total, 60)
         self.duration_label.setText(f"{pos_min:02d}:{pos_sec:02d} / {dur_min:02d}:{dur_sec:02d}")
-
-    def handle_error(self, error_unused): # Tham số error không dùng vì lấy từ media_player
-        """Xử lý lỗi từ QMediaPlayer."""
-        error_code = self.media_player.error()
-        error_string = self.media_player.errorString()
-        print(f"ERROR: Media Player Error - Code: {error_code}, String: '{error_string}'")
-        if not error_string:
-            error_map = { QMediaPlayer.ResourceError: "Cannot load resource.", QMediaPlayer.FormatError: "Unsupported media format.", QMediaPlayer.NetworkError: "Network error.", QMediaPlayer.AccessDeniedError: "Access denied.", }
-            error_string = error_map.get(error_code, f"Unknown error code: {error_code}")
-        QMessageBox.critical(self, "Media Player Error", error_string)
-        self.play_pause_btn.setEnabled(False)
-        self.position_slider.setEnabled(False)
-        self.position_slider.setValue(0)
-        self.duration_label.setText("--:-- / --:--")
-        self.set_subtitle_text("")
-        self.progress_bar.setVisible(False)
-        self.save_subtitle_btn.setEnabled(False)
 
     def save_subtitles(self):
         """Mở hộp thoại và lưu phụ đề."""
@@ -505,7 +379,7 @@ class VideoPlayer(QWidget):
         video_filename = os.path.basename(self.video_path) if self.video_path else "video"
         video_name = os.path.splitext(video_filename)[0]
         default_dir = os.path.dirname(self.video_path) if self.video_path else ""
-        default_filename = os.path.join(default_dir, f"{video_name}.srt") # Mặc định .srt
+        default_filename = os.path.join(default_dir, f"{video_name}.srt")
 
         options = QFileDialog.Options()
         save_path, selected_filter = QFileDialog.getSaveFileName(
@@ -513,18 +387,23 @@ class VideoPlayer(QWidget):
             "SubRip Subtitles (*.srt);;WebVTT (*.vtt);;JSON (*.json);;All Files (*)",
             options=options)
 
-        if not save_path: return
+        if not save_path:
+            return
 
         print(f"INFO: Saving subtitles to: {save_path}")
         _, ext = os.path.splitext(save_path)
         ext = ext.lower()
 
         try:
-            if ext == '.srt' or "(*.srt)" in selected_filter: self.save_as_srt(save_path)
-            elif ext == '.vtt' or "(*.vtt)" in selected_filter: self.save_as_vtt(save_path)
-            elif ext == '.json' or "(*.json)" in selected_filter: self.save_as_json(save_path)
+            if ext == '.srt' or "(*.srt)" in selected_filter:
+                self.save_as_srt(save_path)
+            elif ext == '.vtt' or "(*.vtt)" in selected_filter:
+                self.save_as_vtt(save_path)
+            elif ext == '.json' or "(*.json)" in selected_filter:
+                self.save_as_json(save_path)
             else:
-                if not ext: save_path += ".srt"
+                if not ext:
+                    save_path += ".srt"
                 self.save_as_srt(save_path)
                 QMessageBox.information(self, "Format Note", f"Saved as SRT format (default).")
             QMessageBox.information(self, "Success", f"Subtitles saved to:\n{save_path}")
@@ -538,10 +417,12 @@ class VideoPlayer(QWidget):
             count = 1
             for segment in self.segments:
                 text = segment.get('text', '').strip()
-                if not text: continue
+                if not text:
+                    continue
                 start_time = self.format_time_srt(segment.get('start', 0))
                 end_time = self.format_time_srt(segment.get('end', 0))
-                if segment.get('start', 0) >= segment.get('end', 0): continue # Bỏ qua nếu time không hợp lệ
+                if segment.get('start', 0) >= segment.get('end', 0):
+                    continue
                 f.write(f"{count}\n{start_time} --> {end_time}\n{text}\n\n")
                 count += 1
 
@@ -551,10 +432,12 @@ class VideoPlayer(QWidget):
             f.write("WEBVTT\n\n")
             for segment in self.segments:
                 text = segment.get('text', '').strip()
-                if not text: continue
+                if not text:
+                    continue
                 start_time = self.format_time_vtt(segment.get('start', 0))
                 end_time = self.format_time_vtt(segment.get('end', 0))
-                if segment.get('start', 0) >= segment.get('end', 0): continue
+                if segment.get('start', 0) >= segment.get('end', 0):
+                    continue
                 f.write(f"{start_time} --> {end_time}\n{text}\n\n")
 
     def save_as_json(self, filepath):
@@ -563,12 +446,15 @@ class VideoPlayer(QWidget):
             serializable_segments = [{'start': s.get('start',0), 'end':s.get('end',0), 'text':s.get('text','')} for s in self.segments]
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(serializable_segments, f, indent=2, ensure_ascii=False)
-        except TypeError as e: raise TypeError(f"Data non-serializable: {e}")
-        except Exception as e: raise e
+        except TypeError as e:
+            raise TypeError(f"Data non-serializable: {e}")
+        except Exception as e:
+            raise e
 
     def format_time_srt(self, seconds):
         """Định dạng thời gian SRT: HH:MM:SS,mmm"""
-        if not isinstance(seconds, (int, float)) or seconds < 0: seconds = 0
+        if not isinstance(seconds, (int, float)) or seconds < 0:
+            seconds = 0
         millis = round(seconds * 1000)
         secs, millis = divmod(millis, 1000)
         mins, secs = divmod(secs, 60)
@@ -577,7 +463,8 @@ class VideoPlayer(QWidget):
 
     def format_time_vtt(self, seconds):
         """Định dạng thời gian WebVTT: HH:MM:SS.mmm"""
-        if not isinstance(seconds, (int, float)) or seconds < 0: seconds = 0
+        if not isinstance(seconds, (int, float)) or seconds < 0:
+            seconds = 0
         millis = round(seconds * 1000)
         secs, millis = divmod(millis, 1000)
         mins, secs = divmod(secs, 60)
@@ -587,8 +474,8 @@ class VideoPlayer(QWidget):
     def closeEvent(self, event):
         """Dọn dẹp khi đóng cửa sổ."""
         print("INFO: Close event called. Cleaning up...")
-        self.media_player.stop()
-        if self.subtitle_timer.isActive(): self.subtitle_timer.stop()
+        self.mediaplayer.stop()
+        self.timer.stop()
 
         if hasattr(self, 'worker_thread') and self.worker_thread.isRunning():
             print("INFO: Stopping worker thread...")
@@ -597,15 +484,18 @@ class VideoPlayer(QWidget):
                 print("WARNING: Worker thread termination required.")
                 self.worker_thread.terminate()
                 self.worker_thread.wait()
-            else: print("INFO: Worker thread finished.")
-        elif hasattr(self, 'worker_thread'): print("INFO: Worker thread not running.")
+            else:
+                print("INFO: Worker thread finished.")
+        elif hasattr(self, 'worker_thread'):
+            print("INFO: Worker thread not running.")
 
         try:
             if self.temp_dir and os.path.exists(self.temp_dir):
-                 print(f"INFO: Removing temporary directory: {self.temp_dir}")
-                 shutil.rmtree(self.temp_dir, ignore_errors=True)
-                 self.temp_dir = None
-        except Exception as e: print(f"WARNING: Could not remove temp dir {self.temp_dir}: {e}")
+                print(f"INFO: Removing temporary directory: {self.temp_dir}")
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
+                self.temp_dir = None
+        except Exception as e:
+            print(f"WARNING: Could not remove temp dir {self.temp_dir}: {e}")
 
         event.accept()
         print("INFO: Window closed.")

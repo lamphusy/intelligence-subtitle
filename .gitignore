@@ -1,0 +1,15 @@
+# Ignore sample video files
+sample_videos/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary files created by the app
+/subtitle_app_*
+/tmp*/
+
+# OS specific files
+.DS_Store
+Thumbs.db 
