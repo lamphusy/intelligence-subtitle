@@ -70,14 +70,12 @@ class VideoPlayer(QWidget):
         super().__init__()
         self.setWindowTitle("Intelligent Subtitle - Speech to Text with Whisper")
         self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(10, 10, 10, 10)
-        self.layout.setSpacing(10)
-
+        self.layout.setContentsMargins(0, 0, 0, 0)  # Remove margins for fullscreen
+        self.layout.setSpacing(0)
+        
         # Create VLC instance with macOS specific options if needed
         vlc_options = []
         if sys.platform == "darwin":
-            # Explicitly set the video output module for macOS
-            # This can help resolve rendering issues like "Failed to create video converter"
             vlc_options.append("--vout=macosx") 
             
         self.instance = vlc.Instance(vlc_options)
@@ -88,22 +86,20 @@ class VideoPlayer(QWidget):
         self.video_widget.setMinimumSize(640, 360)
         self.video_widget.setStyleSheet("background-color: black;")
         
-        # IMPORTANT: Don't set the video output here for macOS yet
-        # We'll do it in showEvent after the widget is visible
-        if sys.platform.startswith('linux'): 
-            self.mediaplayer.set_xwindow(self.video_widget.winId())
-        elif sys.platform == "win32": 
-            self.mediaplayer.set_hwnd(self.video_widget.winId())
-        # elif sys.platform == "darwin": 
-        #     # We will set nsobject in showEvent for macOS
-        #     pass 
+        # Set mouse tracking for hover events
+        self.video_widget.setMouseTracking(True)
+        self.setMouseTracking(True)
         
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setFixedHeight(15)
-
+        # Create controls container
+        self.controls_container = QWidget(self)
+        self.controls_container.setStyleSheet("background-color: rgba(0, 0, 0, 150);")
+        self.controls_container.hide()  # Initially hidden
+        
+        # Create controls layout
         self.controls_layout = QHBoxLayout()
+        self.controls_layout.setContentsMargins(10, 5, 10, 5)
+        
+        # Create controls
         self.open_btn = QPushButton("Open Video")
         self.open_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
         self.play_pause_btn = QPushButton()
@@ -119,18 +115,39 @@ class VideoPlayer(QWidget):
         self.save_subtitle_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
         self.save_subtitle_btn.clicked.connect(self.save_subtitles)
         self.save_subtitle_btn.setEnabled(False)
-
+        self.fullscreen_btn = QPushButton()
+        self.fullscreen_btn.setIcon(self.style().standardIcon(QStyle.SP_TitleBarMaxButton))
+        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
+        
+        # Add controls to layout
         self.controls_layout.addWidget(self.open_btn)
         self.controls_layout.addWidget(self.play_pause_btn)
         self.controls_layout.addWidget(self.position_slider, 1)
         self.controls_layout.addWidget(self.duration_label)
         self.controls_layout.addWidget(self.save_subtitle_btn)
-
+        self.controls_layout.addWidget(self.fullscreen_btn)
+        
+        # Set controls layout to container
+        self.controls_container.setLayout(self.controls_layout)
+        
+        # Add widgets to main layout
         self.layout.addWidget(self.video_widget, 1)
-        self.layout.addWidget(self.progress_bar)
-        self.layout.addLayout(self.controls_layout)
+        self.layout.addWidget(self.controls_container)
         self.setLayout(self.layout)
-
+        
+        # Add progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFixedHeight(15)
+        self.layout.addWidget(self.progress_bar)
+        
+        # Mouse tracking timer for controls
+        self.mouse_timer = QTimer(self)
+        self.mouse_timer.setInterval(2000)  # 2 seconds
+        self.mouse_timer.timeout.connect(self.hide_controls)
+        self.mouse_timer.setSingleShot(True)
+        
         self.segments = []
         self.current_segment_index = -1
         self.next_segment_index = 0
@@ -499,6 +516,43 @@ class VideoPlayer(QWidget):
 
         event.accept()
         print("INFO: Window closed.")
+
+    def enterEvent(self, event):
+        """Show controls when mouse enters the widget"""
+        self.show_controls()
+        
+    def leaveEvent(self, event):
+        """Start timer to hide controls when mouse leaves"""
+        self.mouse_timer.start()
+        
+    def show_controls(self):
+        """Show the controls"""
+        self.controls_container.show()
+        self.mouse_timer.stop()
+        
+    def hide_controls(self):
+        """Hide the controls"""
+        if not self.isFullScreen():
+            self.controls_container.hide()
+            
+    def toggle_fullscreen(self):
+        """Toggle fullscreen mode"""
+        if self.isFullScreen():
+            self.showNormal()
+            self.controls_container.hide()
+        else:
+            self.showFullScreen()
+            self.show_controls()
+            
+    def keyPressEvent(self, event):
+        """Handle keyboard events"""
+        if event.key() == Qt.Key_Escape and self.isFullScreen():
+            self.showNormal()
+            self.controls_container.hide()
+        elif event.key() == Qt.Key_Space:
+            self.toggle_play_pause()
+        elif event.key() == Qt.Key_F:
+            self.toggle_fullscreen()
 
 # --- Main execution block ---
 if __name__ == '__main__':
