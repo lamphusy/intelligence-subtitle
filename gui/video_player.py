@@ -9,9 +9,9 @@ import vlc
 # --- PyQt5 Imports ---
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                              QFileDialog, QMessageBox, QApplication, QSlider, QStyle,
-                             QProgressBar)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QRect, QUrl
-from PyQt5.QtGui import QFont, QFontMetrics
+                             QProgressBar, QFrame)
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QRect, QUrl, QPropertyAnimation, QEasingCurve, QPoint, pyqtProperty
+from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QColor
 
 # --- Giả lập core nếu không tìm thấy ---
 try:
@@ -59,6 +59,84 @@ except ImportError as e:
         print(f"Dummy transcribe called: Path={audio_path}, Temp={temp_dir}")
         return []
 
+class PlayPauseOverlay(QWidget):
+    """Overlay widget for play/pause animation"""
+    
+    # Define the opacity property for Qt
+    opacity = pyqtProperty(float, lambda self: self._opacity, lambda self, value: self.set_opacity(value))
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setFixedSize(100, 100)
+        self.move(parent.width()//2 - 50, parent.height()//2 - 50)
+        self._opacity = 0.0
+        self.is_play = True
+        self.animation = QPropertyAnimation(self, b"opacity")
+        self.animation.setDuration(300)
+        self.animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.animation.finished.connect(self.hide)
+        
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Draw semi-transparent background
+        painter.fillRect(self.rect(), QColor(0, 0, 0, int(150 * self._opacity)))
+        
+        # Draw play/pause icon
+        painter.setPen(QColor(255, 255, 255, int(255 * self._opacity)))
+        painter.setBrush(QColor(255, 255, 255, int(255 * self._opacity)))
+        
+        if self.is_play:
+            # Draw play triangle
+            points = [
+                QPoint(40, 30),
+                QPoint(40, 70),
+                QPoint(70, 50)
+            ]
+            painter.drawPolygon(points)
+        else:
+            # Draw pause bars
+            painter.drawRect(35, 30, 15, 40)
+            painter.drawRect(55, 30, 15, 40)
+            
+    def show_play(self):
+        """Show play icon with animation"""
+        self.is_play = True
+        self.show()
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(1.0)
+        self.animation.start()
+        
+    def show_pause(self):
+        """Show pause icon with animation"""
+        self.is_play = False
+        self.show()
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(1.0)
+        self.animation.start()
+        
+    def set_opacity(self, value):
+        """Set opacity value and trigger update"""
+        self._opacity = float(value)
+        self.update()
+
+class VideoFrame(QFrame):
+    """Custom QFrame for VLC video output"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(640, 360)
+        self.setStyleSheet("background-color: black;")
+        if sys.platform == "darwin":
+            self.setAttribute(Qt.WA_DontCreateNativeAncestors)
+            self.setAttribute(Qt.WA_NativeWindow)
+            
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'play_pause_overlay'):
+            self.play_pause_overlay.move(self.width()//2 - 50, self.height()//2 - 50)
+
 class VideoPlayer(QWidget):
     process_video_signal = pyqtSignal(str)
     SUBTITLE_LR_MARGIN = 20
@@ -73,18 +151,27 @@ class VideoPlayer(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)  # Remove margins for fullscreen
         self.layout.setSpacing(0)
         
-        # Create VLC instance with macOS specific options if needed
+        # Create VLC instance with platform-specific options
         vlc_options = []
         if sys.platform == "darwin":
-            vlc_options.append("--vout=macosx") 
+            vlc_options.extend([
+                "--vout=macosx",
+                "--no-video-deco",
+                "--no-embedded-video",
+                "--no-video-title-show",
+                "--no-autoscale",
+                "--video-filter=none"
+            ])
             
         self.instance = vlc.Instance(vlc_options)
         self.mediaplayer = self.instance.media_player_new()
         
         # Create video widget
-        self.video_widget = QWidget(self)
-        self.video_widget.setMinimumSize(640, 360)
-        self.video_widget.setStyleSheet("background-color: black;")
+        self.video_widget = VideoFrame(self)
+        
+        # Create play/pause overlay
+        self.video_widget.play_pause_overlay = PlayPauseOverlay(self.video_widget)
+        self.video_widget.play_pause_overlay.hide()
         
         # Set mouse tracking for hover events
         self.video_widget.setMouseTracking(True)
@@ -144,7 +231,7 @@ class VideoPlayer(QWidget):
         
         # Mouse tracking timer for controls
         self.mouse_timer = QTimer(self)
-        self.mouse_timer.setInterval(2000)  # 2 seconds
+        self.mouse_timer.setInterval(1000)  # 1 second
         self.mouse_timer.timeout.connect(self.hide_controls)
         self.mouse_timer.setSingleShot(True)
         
@@ -193,11 +280,16 @@ class VideoPlayer(QWidget):
                 print(f"INFO: Setting nsobject for VLC: {self.video_widget.winId()}")
                 self.mediaplayer.set_nsobject(int(self.video_widget.winId()))
                 print("INFO: nsobject set successfully.")
+                
+                # Additional VLC configuration for macOS
+                self.mediaplayer.video_set_scale(0)  # Auto scale
+                self.mediaplayer.video_set_aspect_ratio(None)  # Reset aspect ratio
+                self.mediaplayer.video_set_deinterlace(None)  # Disable deinterlacing
             except Exception as e:
                 print(f"ERROR: Failed to set nsobject for VLC: {e}")
                 QMessageBox.critical(self, "VLC Error", f"Failed to initialize VLC video output:\n{str(e)}")
         # Also trigger UI update when shown
-        QTimer.singleShot(100, self.update_ui) 
+        QTimer.singleShot(100, self.update_ui)
 
     def load_video(self, video_path):
         """Tải video mới, đặt lại trạng thái và bắt đầu gỡ băng."""
@@ -334,26 +426,27 @@ class VideoPlayer(QWidget):
             print(f"ERROR: Exception while checking/enabling subtitles: {e}")
 
     def toggle_play_pause(self):
-        """Chuyển đổi giữa trạng thái phát và tạm dừng."""
+        """Toggle play/pause state"""
         if not self.play_pause_btn.isEnabled():
             return
             
         if self.mediaplayer.is_playing():
             self.mediaplayer.pause()
-            self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.video_widget.play_pause_overlay.show_play()
         else:
-            # Ensure media is loaded before playing
             if self.mediaplayer.get_media() is None:
-                 QMessageBox.warning(self, "Warning", "No video loaded.")
-                 return
-                 
+                QMessageBox.warning(self, "Warning", "No video loaded.")
+                return
+                
             if self.mediaplayer.play() == -1:
                 QMessageBox.critical(self, "Error", "Unable to play video")
                 return
-            self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            self.video_widget.play_pause_overlay.show_pause()
             self.timer.start()
-            # Explicitly call update_ui after starting play
-            QTimer.singleShot(50, self.update_ui) 
+            
+        # Update play/pause button icon
+        self.play_pause_btn.setIcon(self.style().standardIcon(
+            QStyle.SP_MediaPause if self.mediaplayer.is_playing() else QStyle.SP_MediaPlay))
 
     def set_position(self, position):
         """Di chuyển vị trí phát media player."""
@@ -517,13 +610,21 @@ class VideoPlayer(QWidget):
         event.accept()
         print("INFO: Window closed.")
 
+    def mouseMoveEvent(self, event):
+        """Handle mouse movement to show/hide controls"""
+        self.show_controls()
+        self.mouse_timer.start()  # Restart timer on mouse move
+        super().mouseMoveEvent(event)
+
     def enterEvent(self, event):
         """Show controls when mouse enters the widget"""
         self.show_controls()
+        self.mouse_timer.start()  # Start timer when mouse enters
         
     def leaveEvent(self, event):
-        """Start timer to hide controls when mouse leaves"""
-        self.mouse_timer.start()
+        """Hide controls when mouse leaves"""
+        self.hide_controls()
+        self.mouse_timer.stop()
         
     def show_controls(self):
         """Show the controls"""
@@ -553,6 +654,28 @@ class VideoPlayer(QWidget):
             self.toggle_play_pause()
         elif event.key() == Qt.Key_F:
             self.toggle_fullscreen()
+
+    def video_clicked(self, event):
+        """Handle video widget click event"""
+        if self.mediaplayer.get_media() is None:
+            return
+            
+        if self.mediaplayer.is_playing():
+            self.mediaplayer.pause()
+            self.video_widget.play_pause_overlay.show_play()
+        else:
+            if self.mediaplayer.play() == -1:
+                QMessageBox.critical(self, "Error", "Unable to play video")
+                return
+            self.video_widget.play_pause_overlay.show_pause()
+            self.timer.start()
+            
+        # Update play/pause button icon
+        self.play_pause_btn.setIcon(self.style().standardIcon(
+            QStyle.SP_MediaPause if self.mediaplayer.is_playing() else QStyle.SP_MediaPlay))
+            
+        # Show controls
+        self.show_controls()
 
 # --- Main execution block ---
 if __name__ == '__main__':
