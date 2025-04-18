@@ -173,22 +173,22 @@ class VideoPlayer(QWidget):
         self.video_widget.play_pause_overlay = PlayPauseOverlay(self.video_widget)
         self.video_widget.play_pause_overlay.hide()
         
-        # --- Top toolbar: Open and Save buttons ---
+        # Set mouse tracking for hover events
+        self.video_widget.setMouseTracking(True)
+        self.setMouseTracking(True)
+        
+        # Create controls container
+        self.controls_container = QWidget(self)
+        self.controls_container.setStyleSheet("background-color: rgba(0, 0, 0, 150);")
+        self.controls_container.hide()  # Initially hidden
+        
+        # Create controls layout
+        self.controls_layout = QHBoxLayout()
+        self.controls_layout.setContentsMargins(10, 5, 10, 5)
+        
+        # Create controls
         self.open_btn = QPushButton("Open Video")
         self.open_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
-        self.open_btn.clicked.connect(self.open_video_dialog)
-        self.save_subtitle_btn = QPushButton("Save Subtitles")
-        self.save_subtitle_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
-        self.save_subtitle_btn.clicked.connect(self.save_subtitles)
-        self.save_subtitle_btn.setEnabled(False)
-        self.top_toolbar = QWidget(self)
-        top_layout = QHBoxLayout(self.top_toolbar)
-        top_layout.setContentsMargins(10, 5, 10, 5)
-        top_layout.addWidget(self.open_btn)
-        top_layout.addStretch(1)
-        top_layout.addWidget(self.save_subtitle_btn)
-        
-        # --- Bottom status bar: play/pause, slider, time, and fullscreen ---
         self.play_pause_btn = QPushButton()
         self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
@@ -198,32 +198,47 @@ class VideoPlayer(QWidget):
         self.position_slider.sliderMoved.connect(self.set_position)
         self.duration_label = QLabel("00:00 / 00:00")
         self.duration_label.setFixedWidth(100)
+        self.save_subtitle_btn = QPushButton("Save Subtitles")
+        self.save_subtitle_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        self.save_subtitle_btn.clicked.connect(self.save_subtitles)
+        self.save_subtitle_btn.setEnabled(False)
         self.fullscreen_btn = QPushButton()
         self.fullscreen_btn.setIcon(self.style().standardIcon(QStyle.SP_TitleBarMaxButton))
         self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
-        self.bottom_status_bar = QWidget(self)
-        bottom_layout = QHBoxLayout(self.bottom_status_bar)
-        bottom_layout.setContentsMargins(10, 5, 10, 5)
-        bottom_layout.addWidget(self.play_pause_btn)
-        bottom_layout.addWidget(self.position_slider, 1)
-        bottom_layout.addWidget(self.duration_label)
-        bottom_layout.addStretch(1)
-        bottom_layout.addWidget(self.fullscreen_btn)
         
-        # Build main layout: top toolbar, video, bottom status bar, then progress
-        self.layout.addWidget(self.top_toolbar)
+        # Add controls to layout
+        self.controls_layout.addWidget(self.play_pause_btn)
+        self.controls_layout.addWidget(self.position_slider, 1)
+        self.controls_layout.addWidget(self.fullscreen_btn)
+        
+        # Set controls layout to container
+        self.controls_container.setLayout(self.controls_layout)
+        
+        # Top controls container (open video, save subtitles)
+        self.top_controls_container = QWidget(self)
+        self.top_controls_container.setStyleSheet("background-color: rgba(0, 0, 0, 150);")
+        top_layout = QHBoxLayout()
+        top_layout.setContentsMargins(10, 5, 10, 5)
+        top_layout.addWidget(self.open_btn)
+        top_layout.addWidget(self.save_subtitle_btn)
+        self.top_controls_container.setLayout(top_layout)
+
+         # Add widgets to main layout
+        self.layout.addWidget(self.top_controls_container)
         self.layout.addWidget(self.video_widget, 1)
-        self.layout.addWidget(self.bottom_status_bar)
+        self.layout.addWidget(self.controls_container)
+        self.setLayout(self.layout)
+        
+        # Add progress bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(False)
         self.progress_bar.setFixedHeight(15)
         self.layout.addWidget(self.progress_bar)
-        self.setLayout(self.layout)
         
         # Mouse tracking timer for controls
         self.mouse_timer = QTimer(self)
-        self.mouse_timer.setInterval(1000)  # 1 second
+        self.mouse_timer.setInterval(2000)  # 2 seconds
         self.mouse_timer.timeout.connect(self.hide_controls)
         self.mouse_timer.setSingleShot(True)
         
@@ -241,6 +256,7 @@ class VideoPlayer(QWidget):
         self.timer.timeout.connect(self.update_ui)
 
         self.setup_worker_thread()
+        self.open_btn.clicked.connect(self.open_video_dialog)
 
     def setup_worker_thread(self):
         """Khởi tạo và cấu hình luồng worker."""
@@ -318,8 +334,14 @@ class VideoPlayer(QWidget):
             self.next_segment_index = 0
             self.save_subtitle_btn.setEnabled(False)
             self.play_pause_btn.setEnabled(True)
-            self.position_slider.setValue(0)
+            # Set slider range to video duration in ms
+            duration = self.mediaplayer.get_length()
+            if duration > 0:
+                self.position_slider.setRange(0, duration)
+            else:
+                self.position_slider.setRange(0, 0)
             self.position_slider.setEnabled(True)
+            self.position_slider.setValue(0)
             self.duration_label.setText("00:00 / 00:00")
 
             # Set window title to include video name
@@ -441,20 +463,23 @@ class VideoPlayer(QWidget):
 
     def set_position(self, position):
         """Di chuyển vị trí phát media player."""
-        self.mediaplayer.set_position(position / 1000.0)
+        # Seek to the specified playback time in milliseconds
+        self.mediaplayer.set_time(int(position))
 
     def update_ui(self):
         """Cập nhật giao diện người dùng."""
-        # Update position slider
-        position = self.mediaplayer.get_position() * 1000
-        self.position_slider.setValue(int(position))
-
-        # Update duration label
+        # Get current playback time and total duration in ms
+        position = self.mediaplayer.get_time()
         duration = self.mediaplayer.get_length()
         if duration > 0:
+            # Adjust slider range if necessary
+            if self.position_slider.maximum() != duration:
+                self.position_slider.setRange(0, duration)
+            # Update slider position and duration label
+            self.position_slider.setValue(position)
             self.update_duration_label(position, duration)
 
-        # Update play/pause button
+        # Stop timer and update play/pause icon if playback paused or ended
         if not self.mediaplayer.is_playing():
             self.timer.stop()
             self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
@@ -619,36 +644,45 @@ class VideoPlayer(QWidget):
         
     def show_controls(self):
         """Show the controls"""
-        self.top_toolbar.show()
-        self.bottom_status_bar.show()
+        self.controls_container.show()
         self.mouse_timer.stop()
         
     def hide_controls(self):
-        """Disabled hide_controls to keep toolbars always visible."""
-        pass
-        
+        """Hide bottom controls only in fullscreen mode"""
+        if self.window().isFullScreen():
+            self.controls_container.hide()
+
     def toggle_fullscreen(self):
-        """Toggle fullscreen mode on the top-level window"""
+        """Toggle fullscreen mode"""
+        # Toggle fullscreen on the top-level window
         window = self.window()
-        # Toggle main window fullscreen state
         if window.isFullScreen():
             window.showNormal()
-            # Optionally hide toolbars when exiting fullscreen
-            self.hide_controls()
+            # Show both control containers in windowed mode
+            if hasattr(self, 'top_controls_container'):
+                self.top_controls_container.show()
+            self.controls_container.show()
         else:
             window.showFullScreen()
-            # Show toolbars when entering fullscreen
+            # Show bottom controls in fullscreen
             self.show_controls()
-            
+            # Hide top controls in fullscreen
+            if hasattr(self, 'top_controls_container'):
+                self.top_controls_container.hide()
+
     def keyPressEvent(self, event):
         """Handle keyboard events"""
-        if event.key() == Qt.Key_Escape and self.isFullScreen():
-            self.showNormal()
-            self.hide_controls()
+        window = self.window()
+        if event.key() == Qt.Key_Escape:
+            # Exit fullscreen if in fullscreen
+            if window.isFullScreen():
+                self.toggle_fullscreen()
         elif event.key() == Qt.Key_Space:
             self.toggle_play_pause()
         elif event.key() == Qt.Key_F:
             self.toggle_fullscreen()
+        else:
+            super().keyPressEvent(event)
 
     def video_clicked(self, event):
         """Handle video widget click event"""
