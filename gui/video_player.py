@@ -173,22 +173,22 @@ class VideoPlayer(QWidget):
         self.video_widget.play_pause_overlay = PlayPauseOverlay(self.video_widget)
         self.video_widget.play_pause_overlay.hide()
         
-        # Set mouse tracking for hover events
-        self.video_widget.setMouseTracking(True)
-        self.setMouseTracking(True)
-        
-        # Create controls container
-        self.controls_container = QWidget(self)
-        self.controls_container.setStyleSheet("background-color: rgba(0, 0, 0, 150);")
-        self.controls_container.hide()  # Initially hidden
-        
-        # Create controls layout
-        self.controls_layout = QHBoxLayout()
-        self.controls_layout.setContentsMargins(10, 5, 10, 5)
-        
-        # Create controls
+        # --- Top toolbar: Open and Save buttons ---
         self.open_btn = QPushButton("Open Video")
         self.open_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
+        self.open_btn.clicked.connect(self.open_video_dialog)
+        self.save_subtitle_btn = QPushButton("Save Subtitles")
+        self.save_subtitle_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        self.save_subtitle_btn.clicked.connect(self.save_subtitles)
+        self.save_subtitle_btn.setEnabled(False)
+        self.top_toolbar = QWidget(self)
+        top_layout = QHBoxLayout(self.top_toolbar)
+        top_layout.setContentsMargins(10, 5, 10, 5)
+        top_layout.addWidget(self.open_btn)
+        top_layout.addStretch(1)
+        top_layout.addWidget(self.save_subtitle_btn)
+        
+        # --- Bottom status bar: play/pause, slider, time, and fullscreen ---
         self.play_pause_btn = QPushButton()
         self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
@@ -198,36 +198,28 @@ class VideoPlayer(QWidget):
         self.position_slider.sliderMoved.connect(self.set_position)
         self.duration_label = QLabel("00:00 / 00:00")
         self.duration_label.setFixedWidth(100)
-        self.save_subtitle_btn = QPushButton("Save Subtitles")
-        self.save_subtitle_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
-        self.save_subtitle_btn.clicked.connect(self.save_subtitles)
-        self.save_subtitle_btn.setEnabled(False)
         self.fullscreen_btn = QPushButton()
         self.fullscreen_btn.setIcon(self.style().standardIcon(QStyle.SP_TitleBarMaxButton))
         self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
+        self.bottom_status_bar = QWidget(self)
+        bottom_layout = QHBoxLayout(self.bottom_status_bar)
+        bottom_layout.setContentsMargins(10, 5, 10, 5)
+        bottom_layout.addWidget(self.play_pause_btn)
+        bottom_layout.addWidget(self.position_slider, 1)
+        bottom_layout.addWidget(self.duration_label)
+        bottom_layout.addStretch(1)
+        bottom_layout.addWidget(self.fullscreen_btn)
         
-        # Add controls to layout
-        self.controls_layout.addWidget(self.open_btn)
-        self.controls_layout.addWidget(self.play_pause_btn)
-        self.controls_layout.addWidget(self.position_slider, 1)
-        self.controls_layout.addWidget(self.duration_label)
-        self.controls_layout.addWidget(self.save_subtitle_btn)
-        self.controls_layout.addWidget(self.fullscreen_btn)
-        
-        # Set controls layout to container
-        self.controls_container.setLayout(self.controls_layout)
-        
-        # Add widgets to main layout
+        # Build main layout: top toolbar, video, bottom status bar, then progress
+        self.layout.addWidget(self.top_toolbar)
         self.layout.addWidget(self.video_widget, 1)
-        self.layout.addWidget(self.controls_container)
-        self.setLayout(self.layout)
-        
-        # Add progress bar
+        self.layout.addWidget(self.bottom_status_bar)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(False)
         self.progress_bar.setFixedHeight(15)
         self.layout.addWidget(self.progress_bar)
+        self.setLayout(self.layout)
         
         # Mouse tracking timer for controls
         self.mouse_timer = QTimer(self)
@@ -249,7 +241,6 @@ class VideoPlayer(QWidget):
         self.timer.timeout.connect(self.update_ui)
 
         self.setup_worker_thread()
-        self.open_btn.clicked.connect(self.open_video_dialog)
 
     def setup_worker_thread(self):
         """Khởi tạo và cấu hình luồng worker."""
@@ -628,28 +619,32 @@ class VideoPlayer(QWidget):
         
     def show_controls(self):
         """Show the controls"""
-        self.controls_container.show()
+        self.top_toolbar.show()
+        self.bottom_status_bar.show()
         self.mouse_timer.stop()
         
     def hide_controls(self):
-        """Hide the controls"""
-        if not self.isFullScreen():
-            self.controls_container.hide()
-            
+        """Disabled hide_controls to keep toolbars always visible."""
+        pass
+        
     def toggle_fullscreen(self):
-        """Toggle fullscreen mode"""
-        if self.isFullScreen():
-            self.showNormal()
-            self.controls_container.hide()
+        """Toggle fullscreen mode on the top-level window"""
+        window = self.window()
+        # Toggle main window fullscreen state
+        if window.isFullScreen():
+            window.showNormal()
+            # Optionally hide toolbars when exiting fullscreen
+            self.hide_controls()
         else:
-            self.showFullScreen()
+            window.showFullScreen()
+            # Show toolbars when entering fullscreen
             self.show_controls()
             
     def keyPressEvent(self, event):
         """Handle keyboard events"""
         if event.key() == Qt.Key_Escape and self.isFullScreen():
             self.showNormal()
-            self.controls_container.hide()
+            self.hide_controls()
         elif event.key() == Qt.Key_Space:
             self.toggle_play_pause()
         elif event.key() == Qt.Key_F:
