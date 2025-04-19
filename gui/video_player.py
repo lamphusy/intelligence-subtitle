@@ -153,15 +153,9 @@ class VideoPlayer(QWidget):
         
         # Create VLC instance with platform-specific options
         vlc_options = []
-        if sys.platform == "darwin":
-            vlc_options.extend([
-                "--vout=macosx",
-                "--no-video-deco",
-                "--no-embedded-video",
-                "--no-video-title-show",
-                "--no-autoscale"
-            ])
-            
+        # Removed macOS-specific VLC options to avoid video converter recursion errors
+        # Using default video output options
+        
         self.instance = vlc.Instance(vlc_options)
         self.mediaplayer = self.instance.media_player_new()
         
@@ -287,10 +281,8 @@ class VideoPlayer(QWidget):
                 self.mediaplayer.set_nsobject(int(self.video_widget.winId()))
                 print("INFO: nsobject set successfully.")
                 
-                # Additional VLC configuration for macOS
-                self.mediaplayer.video_set_scale(0)  # Auto scale
-                self.mediaplayer.video_set_aspect_ratio(None)  # Reset aspect ratio
-                self.mediaplayer.video_set_deinterlace(None)  # Disable deinterlacing
+                # Removed advanced VLC video configuration to avoid filter recursion errors
+                # NOTE: Relying on default scaling and filter behavior
             except Exception as e:
                 print(f"ERROR: Failed to set nsobject for VLC: {e}")
                 QMessageBox.critical(self, "VLC Error", f"Failed to initialize VLC video output:\n{str(e)}")
