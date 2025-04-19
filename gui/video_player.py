@@ -159,8 +159,7 @@ class VideoPlayer(QWidget):
                 "--no-video-deco",
                 "--no-embedded-video",
                 "--no-video-title-show",
-                "--no-autoscale",
-                "--video-filter=none"
+                "--no-autoscale"
             ])
             
         self.instance = vlc.Instance(vlc_options)
