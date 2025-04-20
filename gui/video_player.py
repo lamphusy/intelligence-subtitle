@@ -5,13 +5,14 @@ import json
 import shutil
 import time
 import vlc
+import qtawesome as qta
 
 # --- PyQt5 Imports ---
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                              QFileDialog, QMessageBox, QApplication, QSlider, QStyle,
                              QProgressBar, QFrame)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QRect, QUrl, QPropertyAnimation, QEasingCurve, QPoint, pyqtProperty
-from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QColor
+from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QRect, QUrl, QPropertyAnimation, QEasingCurve, QPoint, pyqtProperty, QSize
+from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QColor, QIcon
 
 # --- Giả lập core nếu không tìm thấy ---
 try:
@@ -151,10 +152,11 @@ class VideoPlayer(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)  # Remove margins for fullscreen
         self.layout.setSpacing(0)
         
-        # Create VLC instance with platform-specific options
+        # Create VLC instance with plugin options
         vlc_options = []
-        # Removed macOS-specific VLC options to avoid video converter recursion errors
-        # Using default video output options
+        # On macOS, use macosx video output only to avoid converter recursion errors
+        if sys.platform == "darwin":
+            vlc_options.append("--vout=macosx")
         
         self.instance = vlc.Instance(vlc_options)
         self.mediaplayer = self.instance.media_player_new()
@@ -179,11 +181,27 @@ class VideoPlayer(QWidget):
         self.controls_layout = QHBoxLayout()
         self.controls_layout.setContentsMargins(10, 5, 10, 5)
         
-        # Create controls
+        # Define icon size for crisp icons
+        icon_size = QSize(16, 16)  # use 16px for icons
+        self.icon_size = icon_size  # store for use elsewhere
+        # Determine device pixel ratio for crisp pixmaps
+        self._dpr = self.devicePixelRatioF() if hasattr(self, 'devicePixelRatioF') else 1.0
+        
+        # Create controls with high-DPI icons
         self.open_btn = QPushButton("Open Video")
-        self.open_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
+        # Load and set crisp icon
+        button_size = QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr))
+        raw = qta.icon('fa5s.folder-open', color='white')
+        pix = raw.pixmap(QSize(int(self.icon_size.width()*self._dpr), int(self.icon_size.height()*self._dpr)))
+        pix.setDevicePixelRatio(self._dpr)
+        self.open_btn.setIcon(QIcon(pix))
+        self.open_btn.setIconSize(self.icon_size)
         self.play_pause_btn = QPushButton()
-        self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        raw = qta.icon('fa5s.play', color='white')
+        pix = raw.pixmap(QSize(int(self.icon_size.width()*self._dpr), int(self.icon_size.height()*self._dpr)))
+        pix.setDevicePixelRatio(self._dpr)
+        self.play_pause_btn.setIcon(QIcon(pix))
+        self.play_pause_btn.setIconSize(self.icon_size)
         self.play_pause_btn.clicked.connect(self.toggle_play_pause)
         self.play_pause_btn.setEnabled(False)
         self.position_slider = QSlider(Qt.Horizontal)
@@ -192,17 +210,53 @@ class VideoPlayer(QWidget):
         self.duration_label = QLabel("00:00 / 00:00")
         self.duration_label.setFixedWidth(100)
         self.save_subtitle_btn = QPushButton("Save Subtitles")
-        self.save_subtitle_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+        raw = qta.icon('fa5s.save', color='white')
+        pix = raw.pixmap(QSize(int(self.icon_size.width()*self._dpr), int(self.icon_size.height()*self._dpr)))
+        pix.setDevicePixelRatio(self._dpr)
+        self.save_subtitle_btn.setIcon(QIcon(pix))
+        self.save_subtitle_btn.setIconSize(self.icon_size)
         self.save_subtitle_btn.clicked.connect(self.save_subtitles)
         self.save_subtitle_btn.setEnabled(False)
-        self.fullscreen_btn = QPushButton()
-        self.fullscreen_btn.setIcon(self.style().standardIcon(QStyle.SP_TitleBarMaxButton))
-        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
-        
-        # Add controls to layout
+
+        # Create fullscreen icon using QLabel
+        self.fullscreen_icon = QLabel()
+        fullscreen_size = QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr))
+        fullscreen_pix = qta.icon('fa5s.expand', color='white').pixmap(fullscreen_size)
+        fullscreen_pix.setDevicePixelRatio(self._dpr)
+        self.fullscreen_icon.setFixedSize(self.icon_size)
+        self.fullscreen_icon.setPixmap(fullscreen_pix)
+        self.fullscreen_icon.setCursor(Qt.PointingHandCursor)
+        self.fullscreen_icon.mousePressEvent = lambda event: self.toggle_fullscreen()
+
+        # Create volume slider for audio control
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        initial_vol = self.mediaplayer.audio_get_volume()
+        if initial_vol < 0:
+            initial_vol = 100
+        self.volume_slider.setValue(initial_vol)
+        # Store previous volume for mute/unmute toggling
+        self._previous_volume = initial_vol
+        self.volume_slider.setFixedWidth(100)
+        self.volume_slider.valueChanged.connect(self.set_volume)
+
+        # Create volume icon next to slider
+        self.volume_icon = QLabel()
+        vol_size = QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr))
+        vol_pix = qta.icon('fa5s.volume-up', color='white').pixmap(vol_size)
+        vol_pix.setDevicePixelRatio(self._dpr)
+        self.volume_icon.setFixedSize(self.icon_size)
+        self.volume_icon.setPixmap(vol_pix)
+        # Make volume icon clickable to toggle mute/unmute
+        self.volume_icon.setCursor(Qt.PointingHandCursor)
+        self.volume_icon.mousePressEvent = self.toggle_mute_icon
+
+        # Bottom controls (play/pause, slider, volume, fullscreen)
         self.controls_layout.addWidget(self.play_pause_btn)
         self.controls_layout.addWidget(self.position_slider, 1)
-        self.controls_layout.addWidget(self.fullscreen_btn)
+        self.controls_layout.addWidget(self.volume_icon)
+        self.controls_layout.addWidget(self.volume_slider)
+        self.controls_layout.addWidget(self.fullscreen_icon)
         
         # Set controls layout to container
         self.controls_container.setLayout(self.controls_layout)
@@ -449,13 +503,37 @@ class VideoPlayer(QWidget):
             self.timer.start()
             
         # Update play/pause button icon
-        self.play_pause_btn.setIcon(self.style().standardIcon(
-            QStyle.SP_MediaPause if self.mediaplayer.is_playing() else QStyle.SP_MediaPlay))
+        self.play_pause_btn.setIcon(qta.icon('fa5s.pause') if self.mediaplayer.is_playing() else qta.icon('fa5s.play'))
 
     def set_position(self, position):
         """Di chuyển vị trí phát media player."""
         # Seek to the specified playback time in milliseconds
         self.mediaplayer.set_time(int(position))
+
+    def set_volume(self, value):
+        """Set VLC audio volume."""
+        self.mediaplayer.audio_set_volume(value)
+
+    def toggle_mute_icon(self, event):
+        """Toggle mute/unmute and update volume icon."""
+        current_mute = bool(self.mediaplayer.audio_get_mute())
+        new_mute = not current_mute
+        if new_mute:
+            # Muting: save current volume and set slider to 0
+            self._previous_volume = self.volume_slider.value()
+            self.volume_slider.setValue(0)
+        else:
+            # Unmuting: restore previous volume
+            restored = getattr(self, '_previous_volume', 100)
+            self.volume_slider.setValue(restored)
+        # Update mute state and icon
+        self.mediaplayer.audio_set_mute(new_mute)
+        # Create high-DPI pixmap for updated volume icon
+        pix_size = QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr))
+        icon_name = 'fa5s.volume-mute' if new_mute else 'fa5s.volume-up'
+        icon_pix = qta.icon(icon_name, color='white').pixmap(pix_size)
+        icon_pix.setDevicePixelRatio(self._dpr)
+        self.volume_icon.setPixmap(icon_pix)
 
     def update_ui(self):
         """Cập nhật giao diện người dùng."""
@@ -473,7 +551,7 @@ class VideoPlayer(QWidget):
         # Stop timer and update play/pause icon if playback paused or ended
         if not self.mediaplayer.is_playing():
             self.timer.stop()
-            self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.play_pause_btn.setIcon(qta.icon('fa5s.play'))
 
     def update_duration_label(self, position, duration):
         """Cập nhật label hiển thị thời gian."""
@@ -653,6 +731,13 @@ class VideoPlayer(QWidget):
             if hasattr(self, 'top_controls_container'):
                 self.top_controls_container.show()
             self.controls_container.show()
+            # Update fullscreen button icon
+            # Create high-DPI pixmap for fullscreen expand icon
+            size = QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr))
+            raw = qta.icon('fa5s.expand', color='white')
+            pix = raw.pixmap(size)
+            pix.setDevicePixelRatio(self._dpr)
+            self.fullscreen_icon.setPixmap(pix)
         else:
             window.showFullScreen()
             # Show bottom controls in fullscreen
@@ -660,6 +745,13 @@ class VideoPlayer(QWidget):
             # Hide top controls in fullscreen
             if hasattr(self, 'top_controls_container'):
                 self.top_controls_container.hide()
+            # Update fullscreen button icon
+            # Create high-DPI pixmap for fullscreen compress icon
+            size = QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr))
+            raw = qta.icon('fa5s.compress', color='white')
+            pix = raw.pixmap(size)
+            pix.setDevicePixelRatio(self._dpr)
+            self.fullscreen_icon.setPixmap(pix)
 
     def keyPressEvent(self, event):
         """Handle keyboard events"""
@@ -691,8 +783,7 @@ class VideoPlayer(QWidget):
             self.timer.start()
             
         # Update play/pause button icon
-        self.play_pause_btn.setIcon(self.style().standardIcon(
-            QStyle.SP_MediaPause if self.mediaplayer.is_playing() else QStyle.SP_MediaPlay))
+        self.play_pause_btn.setIcon(qta.icon('fa5s.pause') if self.mediaplayer.is_playing() else qta.icon('fa5s.play'))
             
         # Show controls
         self.show_controls()
