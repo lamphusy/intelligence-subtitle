@@ -206,7 +206,31 @@ class VideoPlayer(QWidget):
         self.play_pause_icon.setCursor(Qt.PointingHandCursor)
         self.play_pause_icon.mousePressEvent = lambda e: self.toggle_play_pause()
         self.play_pause_icon.setEnabled(False)
+        # Create Slider Style
+        slider_style_sheet = """
+            QSlider::groove:horizontal {
+                border: 1px solid #323232;
+                height: 2px;
+            }
+
+            QSlider::handle:horizontal {
+                background: #ca0100;
+                border: 1px solid #ca0100;
+                width: 10px;  
+                margin: -5px -1px; 
+                border-radius: 5px;
+            }
+
+            QSlider::add-page:horizontal {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #323232, stop:1 #323232);
+            }
+
+            QSlider::sub-page:horizontal {
+                background: #ca0100;
+            }
+        """
         self.position_slider = QSlider(Qt.Horizontal)
+        self.position_slider.setStyleSheet(slider_style_sheet)
         self.position_slider.setRange(0, 0)
         self.position_slider.sliderMoved.connect(self.set_position)
         self.duration_label = QLabel("00:00 / 00:00")
@@ -232,6 +256,7 @@ class VideoPlayer(QWidget):
 
         # Create volume slider for audio control
         self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setStyleSheet(slider_style_sheet)
         self.volume_slider.setRange(0, 100)
         initial_vol = self.mediaplayer.audio_get_volume()
         if initial_vol < 0:
