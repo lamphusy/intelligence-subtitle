@@ -174,7 +174,7 @@ class VideoPlayer(QWidget):
         
         # Create controls container
         self.controls_container = QWidget(self)
-        self.controls_container.setStyleSheet("background-color: rgba(0, 0, 0, 150);")
+        self.controls_container.setStyleSheet("background-color: #000000;")
         self.controls_container.hide()  # Initially hidden
         
         # Create controls layout
