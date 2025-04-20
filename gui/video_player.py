@@ -196,14 +196,16 @@ class VideoPlayer(QWidget):
         pix.setDevicePixelRatio(self._dpr)
         self.open_btn.setIcon(QIcon(pix))
         self.open_btn.setIconSize(self.icon_size)
-        self.play_pause_btn = QPushButton()
-        raw = qta.icon('fa5s.play', color='white')
-        pix = raw.pixmap(QSize(int(self.icon_size.width()*self._dpr), int(self.icon_size.height()*self._dpr)))
-        pix.setDevicePixelRatio(self._dpr)
-        self.play_pause_btn.setIcon(QIcon(pix))
-        self.play_pause_btn.setIconSize(self.icon_size)
-        self.play_pause_btn.clicked.connect(self.toggle_play_pause)
-        self.play_pause_btn.setEnabled(False)
+        # Create play/pause icon using QLabel
+        self.play_pause_icon = QLabel()
+        play_size = QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr))
+        play_pix = qta.icon('fa5s.play', color='white').pixmap(play_size)
+        play_pix.setDevicePixelRatio(self._dpr)
+        self.play_pause_icon.setFixedSize(self.icon_size)
+        self.play_pause_icon.setPixmap(play_pix)
+        self.play_pause_icon.setCursor(Qt.PointingHandCursor)
+        self.play_pause_icon.mousePressEvent = lambda e: self.toggle_play_pause()
+        self.play_pause_icon.setEnabled(False)
         self.position_slider = QSlider(Qt.Horizontal)
         self.position_slider.setRange(0, 0)
         self.position_slider.sliderMoved.connect(self.set_position)
@@ -252,7 +254,7 @@ class VideoPlayer(QWidget):
         self.volume_icon.mousePressEvent = self.toggle_mute_icon
 
         # Bottom controls (play/pause, slider, volume, fullscreen)
-        self.controls_layout.addWidget(self.play_pause_btn)
+        self.controls_layout.addWidget(self.play_pause_icon)
         self.controls_layout.addWidget(self.position_slider, 1)
         self.controls_layout.addWidget(self.volume_icon)
         self.controls_layout.addWidget(self.volume_slider)
@@ -378,7 +380,7 @@ class VideoPlayer(QWidget):
             self.current_segment_index = -1
             self.next_segment_index = 0
             self.save_subtitle_btn.setEnabled(False)
-            self.play_pause_btn.setEnabled(True)
+            self.play_pause_icon.setEnabled(True)
             # Set slider range to video duration in ms
             duration = self.mediaplayer.get_length()
             if duration > 0:
@@ -403,7 +405,7 @@ class VideoPlayer(QWidget):
         except Exception as e:
             print(f"ERROR: Failed to load video: {e}")
             QMessageBox.critical(self, "Error", f"Failed to load video:\n{str(e)}")
-            self.play_pause_btn.setEnabled(False)
+            self.play_pause_icon.setEnabled(False)
             self.position_slider.setEnabled(False)
             self.progress_bar.setVisible(False)
 
@@ -485,7 +487,7 @@ class VideoPlayer(QWidget):
 
     def toggle_play_pause(self):
         """Toggle play/pause state"""
-        if not self.play_pause_btn.isEnabled():
+        if not self.play_pause_icon.isEnabled():
             return
             
         if self.mediaplayer.is_playing():
@@ -502,8 +504,12 @@ class VideoPlayer(QWidget):
             self.video_widget.play_pause_overlay.show_pause()
             self.timer.start()
             
-        # Update play/pause button icon
-        self.play_pause_btn.setIcon(qta.icon('fa5s.pause') if self.mediaplayer.is_playing() else qta.icon('fa5s.play'))
+        # Update play/pause icon with high-DPI pixmap
+        icon_name = 'fa5s.pause' if self.mediaplayer.is_playing() else 'fa5s.play'
+        raw = qta.icon(icon_name, color='white')
+        pix = raw.pixmap(QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr)))
+        pix.setDevicePixelRatio(self._dpr)
+        self.play_pause_icon.setPixmap(pix)
 
     def set_position(self, position):
         """Di chuyển vị trí phát media player."""
@@ -551,7 +557,11 @@ class VideoPlayer(QWidget):
         # Stop timer and update play/pause icon if playback paused or ended
         if not self.mediaplayer.is_playing():
             self.timer.stop()
-            self.play_pause_btn.setIcon(qta.icon('fa5s.play'))
+            # Create high-DPI pixmap for play icon
+            raw = qta.icon('fa5s.play', color='white')
+            pix = raw.pixmap(QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr)))
+            pix.setDevicePixelRatio(self._dpr)
+            self.play_pause_icon.setPixmap(pix)
 
     def update_duration_label(self, position, duration):
         """Cập nhật label hiển thị thời gian."""
@@ -782,8 +792,12 @@ class VideoPlayer(QWidget):
             self.video_widget.play_pause_overlay.show_pause()
             self.timer.start()
             
-        # Update play/pause button icon
-        self.play_pause_btn.setIcon(qta.icon('fa5s.pause') if self.mediaplayer.is_playing() else qta.icon('fa5s.play'))
+        # Update play/pause icon on click
+        icon_name = 'fa5s.pause' if self.mediaplayer.is_playing() else 'fa5s.play'
+        raw = qta.icon(icon_name, color='white')
+        pix = raw.pixmap(QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr)))
+        pix.setDevicePixelRatio(self._dpr)
+        self.play_pause_icon.setPixmap(pix)
             
         # Show controls
         self.show_controls()
