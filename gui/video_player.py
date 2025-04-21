@@ -281,6 +281,7 @@ class VideoPlayer(QWidget):
         # Bottom controls (play/pause, slider, volume, fullscreen)
         self.controls_layout.addWidget(self.play_pause_icon)
         self.controls_layout.addWidget(self.position_slider, 1)
+        self.controls_layout.addWidget(self.duration_label)
         self.controls_layout.addWidget(self.volume_icon)
         self.controls_layout.addWidget(self.volume_slider)
         self.controls_layout.addWidget(self.fullscreen_icon)
@@ -596,9 +597,21 @@ class VideoPlayer(QWidget):
         # Ensure calculations result in integers for formatting
         pos_sec_total = int(position // 1000)
         dur_sec_total = int(duration // 1000)
-        pos_min, pos_sec = divmod(pos_sec_total, 60)
-        dur_min, dur_sec = divmod(dur_sec_total, 60)
-        self.duration_label.setText(f"{pos_min:02d}:{pos_sec:02d} / {dur_min:02d}:{dur_sec:02d}")
+        # Compute hours, minutes, seconds
+        pos_hours, pos_rem = divmod(pos_sec_total, 3600)
+        pos_min, pos_sec = divmod(pos_rem, 60)
+        dur_hours, dur_rem = divmod(dur_sec_total, 3600)
+        dur_min, dur_sec = divmod(dur_rem, 60)
+        # Format strings with hours if present
+        if pos_hours > 0:
+            pos_str = f"{pos_hours}:{pos_min:02d}:{pos_sec:02d}"
+        else:
+            pos_str = f"{pos_min:02d}:{pos_sec:02d}"
+        if dur_hours > 0:
+            dur_str = f"{dur_hours}:{dur_min:02d}:{dur_sec:02d}"
+        else:
+            dur_str = f"{dur_min:02d}:{dur_sec:02d}"
+        self.duration_label.setText(f"{pos_str} / {dur_str}")
 
     def save_subtitles(self):
         """Mở hộp thoại và lưu phụ đề."""
