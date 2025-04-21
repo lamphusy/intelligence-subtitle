@@ -10,9 +10,9 @@ import qtawesome as qta
 # --- PyQt5 Imports ---
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                              QFileDialog, QMessageBox, QApplication, QSlider, QStyle,
-                             QProgressBar, QFrame)
+                             QProgressBar, QFrame, QToolButton, QMenu, QAction)
 from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QRect, QUrl, QPropertyAnimation, QEasingCurve, QPoint, pyqtProperty, QSize
-from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QColor, QIcon
+from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QColor, QIcon, QCursor
 
 # --- Giả lập core nếu không tìm thấy ---
 try:
@@ -278,7 +278,31 @@ class VideoPlayer(QWidget):
         self.volume_icon.setCursor(Qt.PointingHandCursor)
         self.volume_icon.mousePressEvent = self.toggle_mute_icon
 
-        # Bottom controls (play/pause, slider, volume, fullscreen)
+        # Bottom controls (options menu, play/pause, slider, volume, fullscreen)
+        self.options_lbl = QLabel(self)
+        opt_size = QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr))
+        opt_pix = qta.icon('fa5s.bars', color='white').pixmap(opt_size)
+        opt_pix.setDevicePixelRatio(self._dpr)
+        self.options_lbl.setFixedSize(self.icon_size)
+        self.options_lbl.setPixmap(opt_pix)
+        self.options_lbl.setCursor(Qt.PointingHandCursor)
+
+        # Tạo menu ẩn
+        self.options_menu = QMenu(self)
+        open_action = self.options_menu.addAction("Open Video")
+        open_action.triggered.connect(self.open_video_dialog)
+        save_action = self.options_menu.addAction("Save Subtitles")
+        save_action.triggered.connect(self.save_subtitles)
+
+        # Bắt sự kiện click để hiện menu
+        def show_options(event):
+            # Hiển thị menu ngay tại con trỏ chuột
+            self.options_menu.exec_(QCursor.pos())
+
+        self.options_lbl.mousePressEvent = show_options
+
+        # Thêm vào layout
+        self.controls_layout.addWidget(self.options_lbl)
         self.controls_layout.addWidget(self.play_pause_icon)
         self.controls_layout.addWidget(self.position_slider, 1)
         self.controls_layout.addWidget(self.duration_label)
@@ -289,17 +313,7 @@ class VideoPlayer(QWidget):
         # Set controls layout to container
         self.controls_container.setLayout(self.controls_layout)
         
-        # Top controls container (open video, save subtitles)
-        self.top_controls_container = QWidget(self)
-        self.top_controls_container.setStyleSheet("background-color: rgba(0, 0, 0, 150);")
-        top_layout = QHBoxLayout()
-        top_layout.setContentsMargins(10, 5, 10, 5)
-        top_layout.addWidget(self.open_btn)
-        top_layout.addWidget(self.save_subtitle_btn)
-        self.top_controls_container.setLayout(top_layout)
-
-         # Add widgets to main layout
-        self.layout.addWidget(self.top_controls_container)
+        # Add widgets to main layout
         self.layout.addWidget(self.video_widget, 1)
         self.layout.addWidget(self.controls_container)
         self.setLayout(self.layout)
