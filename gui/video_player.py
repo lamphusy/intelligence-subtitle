@@ -296,8 +296,9 @@ class VideoPlayer(QWidget):
 
         # Bắt sự kiện click để hiện menu
         def show_options(event):
-            # Hiển thị menu ngay tại con trỏ chuột
-            self.options_menu.exec_(QCursor.pos())
+            # Hiển thị menu phía trên nút options_lbl
+            pos = self.options_lbl.mapToGlobal(QPoint(0, -self.options_menu.sizeHint().height()))
+            self.options_menu.exec_(pos)
 
         self.options_lbl.mousePressEvent = show_options
 
