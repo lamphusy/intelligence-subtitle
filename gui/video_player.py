@@ -288,7 +288,26 @@ class VideoPlayer(QWidget):
         self.options_lbl.setCursor(Qt.PointingHandCursor)
 
         # Tạo menu ẩn
+        option_menu_style_sheet = """
+        QMenu {
+        background-color: black;
+        border: 1px solid white; /* reserve space for selection border */
+        }
+ 
+        QMenu::item {
+        padding: 2px 20px 2px 20px;
+        border: 1px solid transparent; /* reserve space for selection border */
+        spacing: 20px;
+        }
+ 
+        QMenu::item:selected {
+            border-color: darkblue;
+            background: #a0a0a0;
+            color:white;
+        }
+        """
         self.options_menu = QMenu(self)
+        self.options_menu.setStyleSheet(option_menu_style_sheet)
         open_action = self.options_menu.addAction("Open Video")
         open_action.triggered.connect(self.open_video_dialog)
         save_action = self.options_menu.addAction("Save Subtitles")
