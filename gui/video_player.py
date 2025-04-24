@@ -153,7 +153,27 @@ class VideoPlayer(QWidget):
         self.layout.setSpacing(0)
         
         # Create VLC instance with plugin options
-        vlc_options = []
+        vlc_options = [
+            "--no-video-title-show",
+            "--no-audio-time-stretch",
+            "--avcodec-hw=any",
+            "--avcodec-fast",
+            "--avcodec-skiploopfilter=all",
+            "--avcodec-skip-frame=nonref",
+            "--avcodec-skip-idct=nonref",
+            "--no-sout-rtp-sap",
+            "--no-sout-standard-sap",
+            "--sout-keep",
+            "--no-sout-audio",
+            "--no-sout-video",
+            "--sout-mux-caching=1000",
+            "--network-caching=1000",
+            "--file-caching=1000",
+            "--live-caching=1000",
+            "--disc-caching=1000",
+            "--clock-synchro=0",
+            "--clock-jitter=0"
+        ]
         # On macOS, use macosx video output only to avoid converter recursion errors
         if sys.platform == "darwin":
             vlc_options.append("--vout=macosx")
@@ -232,7 +252,12 @@ class VideoPlayer(QWidget):
         self.position_slider = QSlider(Qt.Horizontal)
         self.position_slider.setStyleSheet(slider_style_sheet)
         self.position_slider.setRange(0, 0)
+        # Enable tracking for smooth updates while dragging
+        self.position_slider.setTracking(True)
+        # Connect signals
         self.position_slider.sliderMoved.connect(self.set_position)
+        # Enable clicking anywhere on the slider
+        self.position_slider.mousePressEvent = self.handle_slider_click
         self.duration_label = QLabel("00:00 / 00:00")
         self.duration_label.setFixedWidth(100)
         self.save_subtitle_btn = QPushButton("Save Subtitles")
@@ -429,6 +454,16 @@ class VideoPlayer(QWidget):
             if not media:
                 raise Exception("Failed to create media object from URI")
             
+            # Add media options for better seeking
+            media.add_option(":no-audio-time-stretch")
+            media.add_option(":avcodec-hw=any")
+            media.add_option(":avcodec-fast")
+            media.add_option(":avcodec-skiploopfilter=all")
+            media.add_option(":avcodec-skip-frame=nonref")
+            media.add_option(":avcodec-skip-idct=nonref")
+            media.add_option(":clock-synchro=0")
+            media.add_option(":clock-jitter=0")
+            
             # Parse media to get duration information sooner
             media.parse()
             
@@ -573,8 +608,25 @@ class VideoPlayer(QWidget):
 
     def set_position(self, position):
         """Di chuyển vị trí phát media player."""
-        # Seek to the specified playback time in milliseconds
-        self.mediaplayer.set_time(int(position))
+        try:
+            # Validate position is within valid range
+            if position < 0:
+                position = 0
+            duration = self.mediaplayer.get_length()
+            if duration > 0 and position > duration:
+                position = duration
+                
+            # Convert position to integer and ensure it's not too large
+            position = int(position)
+            if position > 2**31 - 1:  # Maximum 32-bit signed integer
+                position = 2**31 - 1
+                
+            # Seek to the specified playback time in milliseconds
+            result = self.mediaplayer.set_time(position)
+            if result == -1:
+                print(f"WARNING: Seeking to position {position} failed")
+        except Exception as e:
+            print(f"ERROR: Failed to seek to position {position}: {e}")
 
     def set_volume(self, value):
         """Set VLC audio volume."""
@@ -873,6 +925,25 @@ class VideoPlayer(QWidget):
             
         # Show controls
         self.show_controls()
+
+    def handle_slider_click(self, event):
+        """Handle slider click event to allow clicking anywhere"""
+        if event.button() == Qt.LeftButton:
+            # Calculate position based on click location
+            pos = event.pos().x()
+            value = QStyle.sliderValueFromPosition(
+                self.position_slider.minimum(),
+                self.position_slider.maximum(),
+                pos,
+                self.position_slider.width()
+            )
+            # Set the slider value
+            self.position_slider.setValue(value)
+            # Seek to the new position
+            self.set_position(value)
+            event.accept()
+        else:
+            event.ignore()
 
 # --- Main execution block ---
 if __name__ == '__main__':
