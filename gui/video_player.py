@@ -588,6 +588,7 @@ class VideoPlayer(QWidget):
         if self.mediaplayer.is_playing():
             self.mediaplayer.pause()
             self.video_widget.play_pause_overlay.show_play()
+            self.update_play_pause_icon(False)
         else:
             if self.mediaplayer.get_media() is None:
                 QMessageBox.warning(self, "Warning", "No video loaded.")
@@ -598,9 +599,11 @@ class VideoPlayer(QWidget):
                 return
             self.video_widget.play_pause_overlay.show_pause()
             self.timer.start()
-            
-        # Update play/pause icon with high-DPI pixmap
-        icon_name = 'fa5s.pause' if self.mediaplayer.is_playing() else 'fa5s.play'
+            self.update_play_pause_icon(True)
+
+    def update_play_pause_icon(self, is_playing):
+        """Update play/pause icon based on playing state"""
+        icon_name = 'fa5s.pause' if is_playing else 'fa5s.play'
         raw = qta.icon(icon_name, color='white')
         pix = raw.pixmap(QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr)))
         pix.setDevicePixelRatio(self._dpr)
@@ -666,14 +669,12 @@ class VideoPlayer(QWidget):
             self.position_slider.setValue(position)
             self.update_duration_label(position, duration)
 
-        # Stop timer and update play/pause icon if playback paused or ended
+        # Update play/pause icon based on playing state
+        self.update_play_pause_icon(self.mediaplayer.is_playing())
+
+        # Stop timer if playback paused or ended
         if not self.mediaplayer.is_playing():
             self.timer.stop()
-            # Create high-DPI pixmap for play icon
-            raw = qta.icon('fa5s.play', color='white')
-            pix = raw.pixmap(QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr)))
-            pix.setDevicePixelRatio(self._dpr)
-            self.play_pause_icon.setPixmap(pix)
 
     def update_duration_label(self, position, duration):
         """Cập nhật label hiển thị thời gian."""
@@ -909,19 +910,14 @@ class VideoPlayer(QWidget):
         if self.mediaplayer.is_playing():
             self.mediaplayer.pause()
             self.video_widget.play_pause_overlay.show_play()
+            self.update_play_pause_icon(False)
         else:
             if self.mediaplayer.play() == -1:
                 QMessageBox.critical(self, "Error", "Unable to play video")
                 return
             self.video_widget.play_pause_overlay.show_pause()
             self.timer.start()
-            
-        # Update play/pause icon on click
-        icon_name = 'fa5s.pause' if self.mediaplayer.is_playing() else 'fa5s.play'
-        raw = qta.icon(icon_name, color='white')
-        pix = raw.pixmap(QSize(int(self.icon_size.width() * self._dpr), int(self.icon_size.height() * self._dpr)))
-        pix.setDevicePixelRatio(self._dpr)
-        self.play_pause_icon.setPixmap(pix)
+            self.update_play_pause_icon(True)
             
         # Show controls
         self.show_controls()
