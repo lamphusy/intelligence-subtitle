@@ -1,23 +1,23 @@
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, 
+                              QSlider, QStyle, QSizePolicy, QFileDialog, QFrame, 
+                              QToolButton, QMenu, QAction, QMenuBar, QMessageBox, QProgressBar)
+from PyQt5.QtCore import (Qt, QUrl, QSize, QTimer, QThread, pyqtSignal, 
+                          QPropertyAnimation, QEasingCurve, pyqtProperty, QPoint, QRect)
+from PyQt5.QtGui import QPainter, QColor, QFont, QIcon, QPixmap, QCursor, QFontMetrics
+import vlc
 import sys
 import os
-import tempfile
-import json
-import shutil
 import time
-import vlc
+import tempfile
+import shutil
 import qtawesome as qta
-
-# --- PyQt5 Imports ---
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-                             QFileDialog, QMessageBox, QApplication, QSlider, QStyle,
-                             QProgressBar, QFrame, QToolButton, QMenu, QAction)
-from PyQt5.QtCore import QTimer, Qt, QThread, pyqtSignal, QRect, QUrl, QPropertyAnimation, QEasingCurve, QPoint, pyqtProperty, QSize
-from PyQt5.QtGui import QFont, QFontMetrics, QPainter, QColor, QIcon, QCursor
+from gui.language_dialog import LanguageSelectionDialog
 
 # --- Giả lập core nếu không tìm thấy ---
 try:
     from core.transcriber import transcribe
     from core.worker import TranscriptionWorker
+    from core.translator import GeminiTranslator
     print("INFO: Using actual 'core' module.")
 except ImportError as e:
     print(f"WARNING: Error importing core modules: {e}")
@@ -140,6 +140,7 @@ class VideoFrame(QFrame):
 
 class VideoPlayer(QWidget):
     process_video_signal = pyqtSignal(str)
+    translate_segments_signal = pyqtSignal(list, str)
     SUBTITLE_LR_MARGIN = 20
     SUBTITLE_BOTTOM_MARGIN = 20
     SUBTITLE_FONT_SIZE = 18
@@ -151,6 +152,12 @@ class VideoPlayer(QWidget):
         self.layout = QVBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)  # Remove margins for fullscreen
         self.layout.setSpacing(0)
+        
+        # Initialize properties
+        self.selected_language = "auto"
+        self.gemini_api_key = ""
+        self.original_segments = []
+        self.temp_dir = tempfile.mkdtemp()
         
         # Create VLC instance with plugin options
         vlc_options = [
@@ -379,8 +386,6 @@ class VideoPlayer(QWidget):
         self.segments = []
         self.current_segment_index = -1
         self.next_segment_index = 0
-        self.temp_dir = tempfile.mkdtemp(prefix="subtitle_app_")
-        print(f"INFO: Temp directory created: {self.temp_dir}")
         self.video_path = ""
         self.subtitle_path = ""
         
@@ -393,8 +398,8 @@ class VideoPlayer(QWidget):
         self.open_btn.clicked.connect(self.open_video_dialog)
 
     def setup_worker_thread(self):
-        """Khởi tạo và cấu hình luồng worker."""
-        self.worker_thread = QThread(self)
+        """Set up worker thread for transcription."""
+        self.worker_thread = QThread()
         self.transcription_worker = TranscriptionWorker()
         self.transcription_worker.moveToThread(self.worker_thread)
         self.transcription_worker.transcription_progress.connect(self.on_transcription_progress)
@@ -404,12 +409,29 @@ class VideoPlayer(QWidget):
         self.worker_thread.finished.connect(self.worker_thread.deleteLater)
         self.worker_thread.start()
         print("INFO: Worker thread started.")
+        
+        # Setup translation thread
+        self.translation_thread = QThread()
+        self.translator = None  # Will be created when needed with the API key
 
     def open_video_dialog(self):
-        """Mở hộp thoại chọn tệp video."""
+        """Show language selection dialog before opening video."""
+        # Show language selection dialog
+        lang_dialog = LanguageSelectionDialog(self)
+        if lang_dialog.exec_() != lang_dialog.Accepted:
+            return
+            
+        # Get language selection and API key
+        selection = lang_dialog.get_selection()
+        self.selected_language = selection["language"]
+        self.gemini_api_key = selection["api_key"]
+        
+        print(f"INFO: Selected language: {self.selected_language}")
+        
+        # Now open the file dialog to select video
         file_dialog = QFileDialog(self)
         video_path, _ = file_dialog.getOpenFileName(self, "Open Video", "",
-                                                    "Video Files (*.mp4 *.avi *.mkv *.mov *.wmv);;All Files (*)")
+                                                "Video Files (*.mp4 *.avi *.mkv *.mov *.wmv);;All Files (*)")
         if video_path:
             self.load_video(video_path)
 
@@ -509,35 +531,43 @@ class VideoPlayer(QWidget):
         print(f"INFO: Transcription Progress: {message}")
 
     def on_transcription_complete(self, segments):
-        """Xử lý khi gỡ băng hoàn tất."""
+        """Handle transcription completion."""
         print(f"INFO: Transcription Complete. Received {len(segments)} segments.")
-        self.segments = segments if segments else []
-        self.current_segment_index = -1
-        self.next_segment_index = 0
-        self.save_subtitle_btn.setEnabled(bool(self.segments))
-        self.progress_bar.setVisible(False)
+        # Store original segments
+        self.original_segments = segments.copy() if segments else []
+        
+        # If a specific language is selected, translate the segments
+        if self.selected_language != "auto" and self.original_segments:
+            self.translate_subtitles(self.original_segments, self.selected_language)
+        else:
+            # Use original segments directly
+            self.segments = self.original_segments
+            self.current_segment_index = -1
+            self.next_segment_index = 0
+            self.save_subtitle_btn.setEnabled(bool(self.segments))
+            self.progress_bar.setVisible(False)
 
-        if self.segments:
-            try:
-                self.subtitle_path = os.path.join(self.temp_dir, "subtitles.srt")
-                self.save_as_srt(self.subtitle_path)
-                
-                # Load subtitles into VLC using file URI
-                abs_subtitle_path = os.path.abspath(self.subtitle_path)
-                subtitle_uri = QUrl.fromLocalFile(abs_subtitle_path).toString()
-                print(f"INFO: Setting subtitle file URI: {subtitle_uri}")
-                
-                # Add subtitle track
-                result = self.mediaplayer.add_slave(vlc.MediaSlaveType.subtitle, subtitle_uri, True)
-                if not result:
-                     print("WARNING: add_slave returned False, subtitles might not load.")
-                
-                # Give VLC a moment to process the subtitle file
-                QTimer.singleShot(200, self.check_and_enable_subtitles)
+            if self.segments:
+                try:
+                    self.subtitle_path = os.path.join(self.temp_dir, "subtitles.srt")
+                    self.save_as_srt(self.subtitle_path)
+                    
+                    # Load subtitles into VLC using file URI
+                    abs_subtitle_path = os.path.abspath(self.subtitle_path)
+                    subtitle_uri = QUrl.fromLocalFile(abs_subtitle_path).toString()
+                    print(f"INFO: Setting subtitle file URI: {subtitle_uri}")
+                    
+                    # Add subtitle track
+                    result = self.mediaplayer.add_slave(vlc.MediaSlaveType.subtitle, subtitle_uri, True)
+                    if not result:
+                         print("WARNING: add_slave returned False, subtitles might not load.")
+                    
+                    # Give VLC a moment to process the subtitle file
+                    QTimer.singleShot(200, self.check_and_enable_subtitles)
 
-            except Exception as e:
-                print(f"ERROR: Failed to load subtitles: {e}")
-                QMessageBox.warning(self, "Warning", f"Subtitles were generated but could not be loaded:\n{str(e)}")
+                except Exception as e:
+                    print(f"ERROR: Failed to load subtitles: {e}")
+                    QMessageBox.warning(self, "Warning", f"Subtitles were generated but could not be loaded:\n{str(e)}")
 
     def on_transcription_error(self, error_message):
         """Xử lý khi có lỗi trong quá trình gỡ băng."""
@@ -802,33 +832,40 @@ class VideoPlayer(QWidget):
         return f"{int(hours):02d}:{int(mins):02d}:{int(secs):02d}.{int(millis):03d}"
 
     def closeEvent(self, event):
-        """Dọn dẹp khi đóng cửa sổ."""
-        print("INFO: Close event called. Cleaning up...")
-        self.mediaplayer.stop()
-        self.timer.stop()
-
+        """Clean up resources when closing the player."""
+        print("INFO: Closing player and cleaning up resources...")
+        
+        # Stop playback
+        if self.mediaplayer:
+            self.mediaplayer.stop()
+        
+        # Stop worker threads
+        if hasattr(self, 'transcription_worker'):
+            self.transcription_worker.stop()
+            
+        if hasattr(self, 'translator') and self.translator:
+            self.translator.stop()
+        
+        # Quit threads
         if hasattr(self, 'worker_thread') and self.worker_thread.isRunning():
-            print("INFO: Stopping worker thread...")
             self.worker_thread.quit()
-            if not self.worker_thread.wait(3000):
-                print("WARNING: Worker thread termination required.")
-                self.worker_thread.terminate()
-                self.worker_thread.wait()
-            else:
-                print("INFO: Worker thread finished.")
-        elif hasattr(self, 'worker_thread'):
-            print("INFO: Worker thread not running.")
-
+            self.worker_thread.wait(1000)  # Wait up to 1 second
+            
+        if hasattr(self, 'translation_thread') and self.translation_thread.isRunning():
+            self.translation_thread.quit()
+            self.translation_thread.wait(1000)
+            
+        # Clean up temp directory
         try:
-            if self.temp_dir and os.path.exists(self.temp_dir):
-                print(f"INFO: Removing temporary directory: {self.temp_dir}")
+            if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
+                import shutil
                 shutil.rmtree(self.temp_dir, ignore_errors=True)
-                self.temp_dir = None
+                print(f"INFO: Cleaned up temporary directory: {self.temp_dir}")
         except Exception as e:
-            print(f"WARNING: Could not remove temp dir {self.temp_dir}: {e}")
-
+            print(f"WARNING: Error cleaning up temp dir: {e}")
+            
+        # Accept the close event
         event.accept()
-        print("INFO: Window closed.")
 
     def mouseMoveEvent(self, event):
         """Handle mouse movement to show/hide controls"""
@@ -940,6 +977,99 @@ class VideoPlayer(QWidget):
             event.accept()
         else:
             event.ignore()
+
+    def translate_subtitles(self, segments, target_language):
+        """Translate subtitles to the selected language."""
+        print(f"INFO: Translating subtitles to {target_language}")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        
+        # Set up translator if not already set up
+        if not self.translator or (hasattr(self.translator, 'api_key') and self.translator.api_key != self.gemini_api_key):
+            # Clean up old translator if it exists
+            if self.translator:
+                self.translator.stop()
+                self.translator.deleteLater()
+                
+            # Create new translator with API key
+            self.translator = GeminiTranslator(self.gemini_api_key)
+            self.translator.moveToThread(self.translation_thread)
+            self.translator.translation_progress.connect(self.on_translation_progress)
+            self.translator.translation_complete.connect(self.on_translation_complete)
+            self.translator.translation_error.connect(self.on_translation_error)
+            self.translate_segments_signal.connect(self.translator.translate_segments)
+            
+            # Start thread if not running
+            if not self.translation_thread.isRunning():
+                self.translation_thread.start()
+        
+        # Emit signal to start translation
+        self.translate_segments_signal.emit(segments, target_language)
+    
+    def on_translation_progress(self, current, total):
+        """Handle translation progress updates."""
+        percentage = int((current / total) * 100)
+        self.progress_bar.setValue(percentage)
+        status_msg = f"Translating subtitles ({current}/{total})"
+        print(f"INFO: {status_msg}")
+    
+    def on_translation_complete(self, translated_segments):
+        """Handle translation completion."""
+        print(f"INFO: Translation complete. Received {len(translated_segments)} segments.")
+        
+        # Use translated segments
+        self.segments = translated_segments
+        self.current_segment_index = -1
+        self.next_segment_index = 0
+        self.save_subtitle_btn.setEnabled(bool(self.segments))
+        self.progress_bar.setVisible(False)
+
+        if self.segments:
+            try:
+                self.subtitle_path = os.path.join(self.temp_dir, "subtitles.srt")
+                self.save_as_srt(self.subtitle_path)
+                
+                # Load subtitles into VLC using file URI
+                abs_subtitle_path = os.path.abspath(self.subtitle_path)
+                subtitle_uri = QUrl.fromLocalFile(abs_subtitle_path).toString()
+                print(f"INFO: Setting subtitle file URI: {subtitle_uri}")
+                
+                # Add subtitle track
+                result = self.mediaplayer.add_slave(vlc.MediaSlaveType.subtitle, subtitle_uri, True)
+                if not result:
+                     print("WARNING: add_slave returned False, subtitles might not load.")
+                
+                # Give VLC a moment to process the subtitle file
+                QTimer.singleShot(200, self.check_and_enable_subtitles)
+
+            except Exception as e:
+                print(f"ERROR: Failed to load subtitles: {e}")
+                QMessageBox.warning(self, "Warning", f"Subtitles were generated but could not be loaded:\n{str(e)}")
+    
+    def on_translation_error(self, error_message):
+        """Handle translation errors."""
+        self.progress_bar.setVisible(False)
+        print(f"ERROR: Translation error: {error_message}")
+        QMessageBox.critical(self, "Translation Error", f"Failed to translate subtitles:\n{error_message}")
+        
+        # Fall back to original segments
+        self.segments = self.original_segments
+        self.current_segment_index = -1
+        self.next_segment_index = 0
+        self.save_subtitle_btn.setEnabled(bool(self.segments))
+
+        if self.segments:
+            try:
+                self.subtitle_path = os.path.join(self.temp_dir, "subtitles.srt")
+                self.save_as_srt(self.subtitle_path)
+                
+                # Load subtitles into VLC
+                abs_subtitle_path = os.path.abspath(self.subtitle_path)
+                subtitle_uri = QUrl.fromLocalFile(abs_subtitle_path).toString()
+                result = self.mediaplayer.add_slave(vlc.MediaSlaveType.subtitle, subtitle_uri, True)
+                QTimer.singleShot(200, self.check_and_enable_subtitles)
+            except Exception as e:
+                print(f"ERROR: Failed to load subtitles: {e}")
 
 # --- Main execution block ---
 if __name__ == '__main__':
