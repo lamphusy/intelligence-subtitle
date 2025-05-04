@@ -3,3 +3,5 @@ whisper
 torch
 ffmpeg-python
 python-vlc
+requests
+qtawesome
