@@ -1,6 +1,8 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QRadioButton, 
                              QPushButton, QLineEdit, QGroupBox, QButtonGroup, QMessageBox)
 from PyQt5.QtCore import Qt
+import os
+import json
 
 class LanguageSelectionDialog(QDialog):
     """Dialog for selecting subtitle language"""
@@ -12,7 +14,11 @@ class LanguageSelectionDialog(QDialog):
         self.api_key = ""
         self.selected_language = "auto"
         
+        # Cache file path
+        self.cache_file = os.path.join(os.path.expanduser("~"), ".intelligence_subtitle_cache.json")
+        
         self.init_ui()
+        self.load_cached_api_key()
         
     def init_ui(self):
         layout = QVBoxLayout()
@@ -52,35 +58,94 @@ class LanguageSelectionDialog(QDialog):
         api_layout.addWidget(self.api_key_label)
         
         self.api_key_input = QLineEdit()
-        self.api_key_input.setPlaceholderText("Paste your Gemini API Key here")
+        self.api_key_input.setEchoMode(QLineEdit.Password)
+        self.api_key_input.setPlaceholderText("Enter your Gemini API key here...")
         api_layout.addWidget(self.api_key_input)
         
-        self.api_key_info = QLabel("You can get a Gemini API Key from <a href='https://makersuite.google.com/app/apikey'>Google AI Studio</a>")
-        self.api_key_info.setOpenExternalLinks(True)
-        api_layout.addWidget(self.api_key_info)
+        # Add checkbox for caching
+        self.cache_checkbox = QRadioButton("Remember API key for next time")
+        self.cache_checkbox.setChecked(True)
+        api_layout.addWidget(self.cache_checkbox)
+        
+        # Add status label for cached key
+        self.cache_status_label = QLabel("")
+        self.cache_status_label.setStyleSheet("color: green; font-size: 10px;")
+        api_layout.addWidget(self.cache_status_label)
         
         self.api_group.setLayout(api_layout)
         layout.addWidget(self.api_group)
         
         # Buttons
         button_layout = QHBoxLayout()
-        
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(self.cancel_btn)
-        
         self.next_btn = QPushButton("Next")
         self.next_btn.clicked.connect(self.on_next_clicked)
-        self.next_btn.setDefault(True)
-        button_layout.addWidget(self.next_btn)
         
+        button_layout.addWidget(self.cancel_btn)
+        button_layout.addWidget(self.next_btn)
         layout.addLayout(button_layout)
+        
         self.setLayout(layout)
+        
+    def has_cached_api_key(self):
+        """Check if there's a cached API key available"""
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                    return bool(cache_data.get('api_key', ''))
+            return False
+        except Exception:
+            return False
+    
+    def load_cached_api_key(self):
+        """Load cached API key if available"""
+        try:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                    cached_key = cache_data.get('api_key', '')
+                    if cached_key:
+                        self.api_key_input.setText(cached_key)
+                        self.cache_status_label.setText("✓ Using cached API key")
+                        print("INFO: Loaded cached API key")
+                    else:
+                        self.cache_status_label.setText("")
+            else:
+                self.cache_status_label.setText("")
+        except Exception as e:
+            print(f"WARNING: Failed to load cached API key: {e}")
+            self.cache_status_label.setText("")
+    
+    def save_cached_api_key(self, api_key):
+        """Save API key to cache if user chose to remember it"""
+        if not self.cache_checkbox.isChecked():
+            return
+            
+        try:
+            cache_data = {'api_key': api_key}
+            with open(self.cache_file, 'w') as f:
+                json.dump(cache_data, f)
+            print("INFO: Cached API key")
+        except Exception as e:
+            print(f"WARNING: Failed to cache API key: {e}")
+    
+    def clear_cached_api_key(self):
+        """Clear cached API key"""
+        try:
+            if os.path.exists(self.cache_file):
+                os.remove(self.cache_file)
+                print("INFO: Cleared cached API key")
+        except Exception as e:
+            print(f"WARNING: Failed to clear cached API key: {e}")
     
     def on_language_selected(self):
-        """Handle language selection changes"""
-        # Only enable API key input if a specific language is selected
-        self.api_group.setEnabled(not self.auto_radio.isChecked())
+        """Enable/disable API key input based on language selection"""
+        if self.auto_radio.isChecked():
+            self.api_group.setEnabled(False)
+        else:
+            self.api_group.setEnabled(True)
     
     def on_next_clicked(self):
         """Validate and accept the dialog"""
@@ -96,6 +161,9 @@ class LanguageSelectionDialog(QDialog):
                 return
             
             self.api_key = api_key
+            
+            # Cache the API key if user chose to remember it
+            self.save_cached_api_key(api_key)
             
             if self.english_radio.isChecked():
                 self.selected_language = "english"

@@ -344,6 +344,9 @@ class VideoPlayer(QWidget):
         open_action.triggered.connect(self.open_video_dialog)
         save_action = self.options_menu.addAction("Save Subtitles")
         save_action.triggered.connect(self.save_subtitles)
+        
+        # Add separator
+        self.options_menu.addSeparator()
 
         # Bắt sự kiện click để hiện menu
         def show_options(event):

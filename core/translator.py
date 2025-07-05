@@ -48,8 +48,10 @@ class GeminiTranslator(QObject):
             for segment in segments:
                 text = segment.get('text', '').strip()
                 if not text or text in ['(Music)', '(Âm nhạc)']:
+                    # Keep original for non-translatable segments
                     valid_segments.append(segment.copy())
                 else:
+                    # Add to segments that need translation
                     valid_segments.append(segment)
                     segment_texts.append(text)
             
@@ -98,7 +100,7 @@ class GeminiTranslator(QObject):
                     translated = translated_combined.split(delimiter)
                     if len(translated) == len(batch):
                         return translated
-                except Exception:
+                except Exception as e:
                     pass
                 # If mismatch or error and batch > 1, split in half
                 if len(batch) <= 1:
